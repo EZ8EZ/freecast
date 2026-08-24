@@ -100,9 +100,7 @@ def split_by_demand_type(
         classification = classify_series(df)
 
     regular_ids = classification.filter(pl.col("category") == "smooth")["unique_id"].to_list()
-    intermittent_ids = classification.filter(pl.col("category") != "smooth")[
-        "unique_id"
-    ].to_list()
+    intermittent_ids = classification.filter(pl.col("category") != "smooth")["unique_id"].to_list()
 
     regular_df = df.filter(pl.col("unique_id").is_in(regular_ids))
     intermittent_df = df.filter(pl.col("unique_id").is_in(intermittent_ids))

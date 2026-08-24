@@ -1,0 +1,72 @@
+[
+  {
+    "dataset": "m3",
+    "group": "Yearly",
+    "n_series": 645,
+    "n_dropped": 0,
+    "smape": 18.018797712308444,
+    "mase": 3.0368771206993923,
+    "seconds_elapsed": 36.20581126213074,
+    "model_counts": {
+      "TSB": 1,
+      "AutoARIMA": 166,
+      "AutoETS": 127,
+      "AutoCES": 176,
+      "CrostonSBA": 1,
+      "AutoTheta": 124,
+      "IMAPA": 26,
+      "ADIDA": 24
+    }
+  },
+  {
+    "dataset": "m3",
+    "group": "Quarterly",
+    "n_series": 756,
+    "n_dropped": 0,
+    "smape": 9.724466258372292,
+    "mase": 1.1547193085273204,
+    "seconds_elapsed": 106.88276171684265,
+    "model_counts": {
+      "AutoARIMA": 218,
+      "AutoTheta": 149,
+      "IMAPA": 2,
+      "AutoCES": 206,
+      "CrostonClassic": 1,
+      "AutoETS": 180
+    }
+  },
+  {
+    "dataset": "m3",
+    "group": "Monthly",
+    "n_series": 1428,
+    "n_dropped": 0,
+    "smape": 15.317615163956152,
+    "mase": 0.9479373969540729,
+    "seconds_elapsed": 159.626122713089,
+    "model_counts": {
+      "AutoARIMA": 405,
+      "AutoCES": 342,
+      "AutoTheta": 333,
+      "ADIDA": 9,
+      "AutoETS": 317,
+      "IMAPA": 13,
+      "TSB": 1,
+      "CrostonSBA": 8
+    }
+  },
+  {
+    "dataset": "m3",
+    "group": "Other",
+    "n_series": 174,
+    "n_dropped": 0,
+    "smape": 4.561957484161767,
+    "mase": 1.909662078391526,
+    "seconds_elapsed": 68.38162469863892,
+    "model_counts": {
+      "AutoETS": 37,
+      "AutoARIMA": 49,
+      "AutoTheta": 39,
+      "AutoCES": 49
+    }
+  }
+]

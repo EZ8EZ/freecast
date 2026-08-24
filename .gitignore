@@ -16,3 +16,4 @@ venv/
 bench/data/
 bench/results/*.json
 !bench/results/.gitkeep
+!bench/results/m3_summary.json

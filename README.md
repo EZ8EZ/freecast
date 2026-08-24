@@ -119,10 +119,40 @@ Journal of Forecasting 16(4). **Forecast Pro was a named commercial entrant**
 in that competition — this is the actual, verifiable score we're comparing
 against.
 
-<!-- BENCH_RESULTS -->
+Published M3 competition results (overall average across all 3,003 series):
 
-Run `freecast bench m3` yourself to reproduce these numbers, or to break
-them down by frequency group with `freecast bench m3 --group Monthly`.
+| Method | sMAPE | MASE |
+|---|---|---|
+| Theta | 13.01 | 1.39 |
+| **ForecastPro** (commercial, named M3 entrant) | 13.19 | 1.47 |
+| ForecastX | 13.49 | 1.42 |
+| ETS | 13.07 | 1.43 |
+| AutoARIMA | 13.57 | 1.45 |
+
+freecast, run end-to-end (validate → classify → CV-select → conformal
+forecast) against the real M3 data, one dataset download, ~6m19s total on a
+single laptop-class VM, zero series dropped:
+
+| Group | n | sMAPE | MASE | Time |
+|---|---|---|---|---|
+| Yearly | 645 | 18.02 | 3.04 | 36.2s |
+| Quarterly | 756 | 9.72 | 1.15 | 106.9s |
+| Monthly | 1,428 | 15.32 | 0.95 | 159.6s |
+| Other | 174 | 4.56 | 1.91 | 68.4s |
+| **Overall (weighted)** | **3,003** | **13.87** | **1.50** | **~6m19s** |
+
+freecast's overall sMAPE (13.87) and MASE (1.50) land in the same band as
+Theta, ForecastPro, ETS, and AutoARIMA above — competitive with, though not
+quite beating, the best M3 entrants, from a from-scratch CV-based
+model-selection pipeline with zero per-series tuning. (Yearly is the
+hardest M3 category for every entrant, ours included — short series and a
+6-step horizon leave little room for any method to do well; per-group
+numbers above are directly reproducible with `freecast bench m3 --group
+Yearly`.)
+
+Run `freecast bench m3` yourself to reproduce these numbers, or break them
+down by frequency group with `freecast bench m3 --group Monthly`. Raw
+per-group output: [`bench/results/m3_summary.json`](bench/results/m3_summary.json).
 
 M4 and Tourism harnesses are stubbed out in `bench/` for a follow-up; M5 is
 out of scope for now given its size.
