@@ -1,0 +1,69 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "freecast"
+version = "0.1.0"
+description = "A headless, open-source batch time-series forecasting engine"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "Powerhouse Ventures" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "statsforecast>=2.0.0,<3.0.0",
+    "utilsforecast>=0.2.0,<0.3.0",
+    "polars>=1.0.0,<2.0.0",
+    "duckdb>=1.0.0,<2.0.0",
+    "pyarrow>=17.0.0",
+    "typer>=0.12.0,<1.0.0",
+    "numpy>=1.26.0",
+]
+
+[project.optional-dependencies]
+bench = ["datasetsforecast>=1.0.0,<2.0.0"]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.6.0",
+    "mypy>=1.10.0",
+    "pandas>=2.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/EZ8EZ/freecast"
+Repository = "https://github.com/EZ8EZ/freecast"
+
+[project.scripts]
+freecast = "freecast.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/freecast"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/freecast/py.typed" = "freecast/py.typed"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# typer's idiomatic style calls Option()/Argument() in argument defaults.
+"src/freecast/cli.py" = ["B008"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_ignores = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
