@@ -19,6 +19,27 @@ class ContractError(ValueError):
     """Raised when input data violates the freecast data contract."""
 
 
+def parse_ds_column(df: pl.DataFrame, *, column: str = "ds") -> pl.DataFrame:
+    """Cast a string date column to Date/Datetime in place, if it isn't already.
+
+    Shared by ``validate()`` and any CLI command that reads a raw CSV
+    (which never auto-parses dates) but doesn't otherwise need the full
+    data-contract check — e.g. ``freecast fva``.
+    """
+    if df.schema[column] in (pl.Date, pl.Datetime):
+        return df
+    try:
+        return df.with_columns(pl.col(column).str.to_date(strict=True))
+    except Exception:
+        try:
+            return df.with_columns(pl.col(column).str.to_datetime(strict=True))
+        except Exception as exc:
+            raise ContractError(
+                f"Column {column!r} could not be parsed as a date/datetime. "
+                f"Got dtype {df.schema[column]}. Error: {exc}"
+            ) from exc
+
+
 @dataclass
 class ValidationReport:
     """Summary of a contract validation pass."""
@@ -86,17 +107,7 @@ def validate(
         working = working.with_columns(pl.col("y").cast(pl.Float64))
 
     # ds must be a date/datetime type (or parseable)
-    if working.schema["ds"] not in (pl.Date, pl.Datetime):
-        try:
-            working = working.with_columns(pl.col("ds").str.to_date(strict=True))
-        except Exception:
-            try:
-                working = working.with_columns(pl.col("ds").str.to_datetime(strict=True))
-            except Exception as exc:
-                raise ContractError(
-                    f"Column 'ds' could not be parsed as a date/datetime. "
-                    f"Got dtype {df.schema['ds']}. Error: {exc}"
-                ) from exc
+    working = parse_ds_column(working)
 
     # null values in required columns
     null_counts = working.select([pl.col(c).null_count().alias(c) for c in REQUIRED_COLUMNS]).row(

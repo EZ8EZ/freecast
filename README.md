@@ -187,6 +187,53 @@ If the extra isn't installed, or Hugging Face access isn't set up, freecast
 degrades gracefully to the statistical pool alone — this is exercised in
 `tests/test_engine.py`.
 
+## Overrides, audit trail, and Forecast Value Added
+
+The statistical forecast is a starting point, not the final answer — planners
+override it, and someone eventually needs to answer "who changed this number,
+when, and why," and whether that override actually helped.
+
+**`OverrideStore`** is an append-only audit trail backed by a local DuckDB
+file. Every override is recorded, never mutated — superseding a prior
+override for the same series/date keeps the old row intact with a pointer to
+what replaced it, so the full history is always reconstructable.
+
+```python
+from freecast.overrides import OverrideStore
+
+with OverrideStore("overrides.duckdb") as store:
+    store.add(
+        unique_id="SKU123", ds=date(2024, 3, 1), model="AutoETS",
+        baseline_y_hat=142.0, override_y_hat=180.0,
+        author="j.smith", reason="regional promo confirmed",
+    )
+    final = store.apply(result.forecasts)  # adds y_hat_final, is_overridden
+```
+
+or from the CLI: `freecast override add --unique-id SKU123 --ds 2024-03-01
+--model AutoETS --baseline 142.0 --value 180.0 --author j.smith`, and
+`freecast override log` to see the full trail.
+
+**Forecast Value Added (FVA)** answers the follow-up question: did that
+override — or the statistical model itself — actually beat a naive baseline?
+Published research finds 40-60% of manual overrides make forecasts *worse*;
+FVA is how you find out which ones, per the standard practice described in
+Gilliland's *Business Forecasting*.
+
+```python
+from freecast.fva import compute_fva
+
+result = compute_fva(train_df, forecasts, actuals, freq="MS", overrides=overrides_df)
+result.per_series   # unique_id, naive/statistical/override error, and *_fva columns
+result.overall      # same columns, averaged
+```
+
+or `freecast fva --train train.csv --forecasts forecasts.parquet --actuals
+actuals.csv --freq MS --overrides-db overrides.duckdb`. Positive FVA means
+that layer beat its baseline; negative means it made the forecast worse —
+the standard evidence base for retiring an override layer, or a planner's
+adjustments, that isn't earning its keep.
+
 ## Architecture
 
 ```
@@ -196,10 +243,12 @@ src/freecast/
 ├── selection.py       # cross-validation-driven model selection
 ├── intervals.py       # conformal prediction interval builder
 ├── foundation.py       # optional t0 zero-shot foundation-model candidate
-├── engine.py             # orchestrates the above into one call
-└── cli.py                 # the `freecast` command
-bench/                        # M-competition benchmark harness
-tests/                         # pytest suite
+├── overrides.py         # planner override log with a durable audit trail
+├── fva.py                 # Forecast Value Added scoring
+├── engine.py                # orchestrates the forecasting pipeline
+└── cli.py                     # the `freecast` command
+bench/                            # M-competition benchmark harness
+tests/                             # pytest suite
 ```
 
 The engine is a plain Python library with a thin CLI wrapper — nothing in
@@ -208,16 +257,11 @@ scripts, notebooks, services, or (later) an MCP server without rework.
 
 ## Roadmap (not in this repo yet)
 
-This repo is Phase 1: the core forecasting engine. Deliberately **not**
-included, planned for later:
+Phase 1 (the core engine) and the override/audit-trail/FVA workflow layer are
+here. Deliberately **not** included yet:
 
-- **Override & audit trail.** Planner overrides on top of the statistical
-  forecast, with a full audit history — the accountability layer that
-  actually differentiates enterprise FP&A tooling.
 - **Hierarchical reconciliation.** Rolling SKU-level forecasts up through
   product/region/company hierarchies with coherent totals.
-- **Forecast Value Added (FVA) scoring.** Quantifying whether a planner's
-  override actually improved accuracy versus the statistical baseline.
 - **An MCP server for natural-language access.** Not a hosted chatbot or a
   bundled UI — a thin MCP layer over this same engine, so any MCP-aware
   client can drive it conversationally.
