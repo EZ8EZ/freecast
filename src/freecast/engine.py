@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,29 +9,8 @@ import polars as pl
 from statsforecast import StatsForecast
 
 from freecast import contract, intermittent, selection
+from freecast.freq import resolve_freq
 from freecast.intervals import DEFAULT_LEVELS, build_conformal_intervals
-
-_FREQ_SEASON_LENGTH = {
-    "D": 7,
-    "B": 5,
-    "W": 52,
-    "M": 12,
-    "MS": 12,
-    "Q": 4,
-    "QS": 4,
-    "Y": 1,
-    "A": 1,
-    "AS": 1,
-    "H": 24,
-}
-
-
-def infer_season_length(freq: str | int) -> int:
-    """Best-effort seasonal period for a pandas-style frequency string."""
-    if isinstance(freq, int):
-        return 1
-    key = re.sub(r"^\d+", "", freq.upper())
-    return _FREQ_SEASON_LENGTH.get(key, 1)
 
 
 @dataclass
@@ -57,22 +35,38 @@ class ForecastEngine:
         *,
         h: int,
         freq: str | int,
+        season_length: int | None = None,
         levels: tuple[int, ...] = DEFAULT_LEVELS,
         metric: str = "mase",
         n_windows: int = 2,
         min_history: int = 6,
         on_error: str = "raise",
         n_jobs: int = -1,
+        use_foundation_model: bool = False,
     ) -> None:
+        """
+        season_length: override the seasonal period used by seasonal models
+            and MASE/RMSSE scaling. By default this is inferred from ``freq``
+            (e.g. 12 for monthly data), which is right for genuine calendar
+            data but wrong when ``ds`` carries a frequency label with no real
+            periodicity behind it (e.g. synthetic daily dates standing in for
+            an arbitrarily-ordered sequence) — pass an explicit value in that
+            case rather than letting the freq default inject a seasonal
+            pattern that doesn't exist in the data.
+        """
         self.h = h
         self.freq = freq
+        resolved = resolve_freq(freq)
+        self._freq_polars = resolved.polars
+        self._freq_pandas = resolved.pandas
         self.levels = list(levels)
         self.metric = metric
         self.n_windows = n_windows
         self.min_history = min_history
         self.on_error = on_error
         self.n_jobs = n_jobs
-        self.season_length = infer_season_length(freq)
+        self.season_length = season_length if season_length is not None else resolved.season_length
+        self.use_foundation_model = use_foundation_model
 
     def run(self, df: pl.DataFrame) -> ForecastResult:
         clean_df, report = contract.validate(
@@ -90,17 +84,34 @@ class ForecastEngine:
             reg_sel = selection.select_models(
                 regular_df,
                 h=self.h,
-                freq=self.freq,
+                freq=self._freq_polars,
                 season_length=self.season_length,
                 models=reg_models,
                 n_windows=self.n_windows,
                 metric=self.metric,
                 n_jobs=self.n_jobs,
             )
+
+            t0_forecast = None
+            if self.use_foundation_model:
+                foundation_acc, t0_forecast = selection.evaluate_foundation_model(
+                    regular_df,
+                    h=self.h,
+                    freq=self._freq_pandas,
+                    season_length=self.season_length,
+                    levels=tuple(self.levels),
+                    metric=self.metric,
+                )
+                reg_sel = selection.merge_foundation_candidate(reg_sel, foundation_acc)
+
             selection_parts.append(reg_sel.best_model)
             forecast_parts.append(
                 self._forecast_group(
-                    regular_df, reg_models, reg_sel.best_model, has_native_intervals=True
+                    regular_df,
+                    reg_models,
+                    reg_sel.best_model,
+                    has_native_intervals=True,
+                    extra_forecast=t0_forecast,
                 )
             )
 
@@ -109,7 +120,7 @@ class ForecastEngine:
             int_sel = selection.select_models(
                 intermittent_df,
                 h=self.h,
-                freq=self.freq,
+                freq=self._freq_polars,
                 season_length=self.season_length,
                 models=int_models,
                 n_windows=self.n_windows,
@@ -140,9 +151,10 @@ class ForecastEngine:
         best_model: pl.DataFrame,
         *,
         has_native_intervals: bool,
+        extra_forecast: pl.DataFrame | None = None,
     ) -> pl.DataFrame:
         model_names = [getattr(m, "alias", type(m).__name__) for m in models]
-        sf = StatsForecast(models=models, freq=self.freq, n_jobs=self.n_jobs)
+        sf = StatsForecast(models=models, freq=self._freq_polars, n_jobs=self.n_jobs)
 
         # Conformal intervals need >= 2 full backtest windows of length h left
         # over after fitting; on very short series (some M3 Yearly series
@@ -160,6 +172,10 @@ class ForecastEngine:
             n_windows = max(min(max(self.n_windows, 2), max_feasible_windows), 2)
             ci = build_conformal_intervals(h=self.h, n_windows=n_windows)
             wide = sf.forecast(h=self.h, df=df, level=self.levels, prediction_intervals=ci)
+        if extra_forecast is not None:
+            wide = wide.join(extra_forecast, on=["unique_id", "ds"], how="full", coalesce=True)
+            model_names = [*model_names, "T0"]
+
         wide = wide.join(best_model.select(["unique_id", "model"]), on="unique_id", how="left")
 
         y_col = pl.coalesce(

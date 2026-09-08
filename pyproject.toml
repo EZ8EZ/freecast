@@ -29,6 +29,7 @@ dependencies = [
 
 [project.optional-dependencies]
 bench = ["datasetsforecast>=1.0.0,<2.0.0"]
+foundation = ["tfc-t0>=0.3.0,<0.4.0"]
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.6.0",
@@ -45,6 +46,9 @@ freecast = "freecast.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/freecast"]
+# bench/data/ is a runtime download cache (populated by `freecast bench`,
+# never committed) and must never end up bundled into a release wheel.
+exclude = ["src/freecast/bench/data"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/freecast/py.typed" = "freecast/py.typed"
@@ -61,7 +65,6 @@ select = ["E", "F", "I", "UP", "B"]
 "src/freecast/cli.py" = ["B008"]
 
 [tool.mypy]
-python_version = "3.10"
 ignore_missing_imports = true
 warn_unused_ignores = false
 
