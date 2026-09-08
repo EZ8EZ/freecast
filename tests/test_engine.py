@@ -5,7 +5,7 @@ import datetime
 import polars as pl
 
 from freecast import selection
-from freecast.engine import ForecastEngine, infer_season_length
+from freecast.engine import ForecastEngine
 
 
 def _future_months(start: datetime.date, n: int) -> list[datetime.date]:
@@ -20,12 +20,19 @@ def _future_months(start: datetime.date, n: int) -> list[datetime.date]:
     return dates
 
 
-def test_infer_season_length():
-    assert infer_season_length("MS") == 12
-    assert infer_season_length("1mo") == 1  # unknown key falls back to non-seasonal
-    assert infer_season_length("D") == 7
-    assert infer_season_length("Q") == 4
-    assert infer_season_length(1) == 1
+def test_engine_season_length_agrees_across_freq_dialects():
+    # A Polars-style freq ("1mo") and its pandas-style equivalent ("MS") must
+    # resolve to the same season length — this used to silently diverge
+    # (Polars-style strings fell through to season_length=1), which meant
+    # every M3 benchmark group (fed Polars-style freqs by freecast/bench/runner.py)
+    # was fit with no seasonality at all.
+    assert ForecastEngine(h=6, freq="1mo", n_windows=1).season_length == 12
+    assert ForecastEngine(h=6, freq="MS", n_windows=1).season_length == 12
+    assert ForecastEngine(h=6, freq="1d", n_windows=1).season_length == 7
+    assert ForecastEngine(h=6, freq="D", n_windows=1).season_length == 7
+    assert ForecastEngine(h=6, freq="1q", n_windows=1).season_length == 4
+    assert ForecastEngine(h=6, freq="Q", n_windows=1).season_length == 4
+    assert ForecastEngine(h=6, freq=1, n_windows=1).season_length == 1
 
 
 def test_engine_end_to_end_mixed(mixed_series_df):

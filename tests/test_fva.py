@@ -42,6 +42,17 @@ def test_compute_fva_perfect_forecast_beats_naive(fva_setup):
     assert row["statistical_error"] == pytest.approx(0.0, abs=1e-9)
     assert row["statistical_fva"] > 0
     assert result.metric == "mae"
+
+
+def test_compute_fva_accepts_pandas_style_freq(fva_setup):
+    # The CLI's own --freq help text and README example use pandas-style
+    # aliases like "D"; compute_fva must accept them directly rather than
+    # only the Polars-style form StatsForecast needs internally.
+    train_df, forecasts, actuals = fva_setup
+    result = compute_fva(train_df, forecasts, actuals, freq="D", season_length=1)
+
+    row = result.per_series.row(0, named=True)
+    assert row["statistical_error"] == pytest.approx(0.0, abs=1e-9)
     assert "statistical_fva" in result.overall
 
 

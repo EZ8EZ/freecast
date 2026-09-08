@@ -46,6 +46,9 @@ freecast = "freecast.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/freecast"]
+# bench/data/ is a runtime download cache (populated by `freecast bench`,
+# never committed) and must never end up bundled into a release wheel.
+exclude = ["src/freecast/bench/data"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/freecast/py.typed" = "freecast/py.typed"

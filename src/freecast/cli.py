@@ -42,9 +42,21 @@ def run(
     input_path: Path = typer.Argument(..., help="CSV or Parquet file with (unique_id, ds, y)."),
     horizon: int = typer.Option(..., "--horizon", "-h", help="Forecast horizon."),
     freq: str = typer.Option(
-        ..., "--freq", "-f", help="Pandas-style frequency, e.g. 'MS', 'D', 'W'."
+        ...,
+        "--freq",
+        "-f",
+        help="Frequency, pandas- or Polars-style: e.g. 'MS'/'D'/'W'/'Q' or '1mo'/'1d'/'1w'/'1q'.",
     ),
     output_dir: Path = typer.Option(Path("freecast_output"), "--output-dir", "-o"),
+    season_length: int = typer.Option(
+        None,
+        "--season-length",
+        help=(
+            "Override the seasonal period (default: inferred from --freq, e.g. 12 for "
+            "monthly). Set this if --freq is a label with no real periodicity behind it "
+            "(e.g. synthetic daily dates over data with no weekly pattern)."
+        ),
+    ),
     metric: str = typer.Option(
         "mase", "--metric", help="Model-selection metric: mase|rmsse|smape|bias."
     ),
@@ -76,6 +88,7 @@ def run(
     engine = ForecastEngine(
         h=horizon,
         freq=freq,
+        season_length=season_length,
         levels=level_list,
         metric=metric,
         n_windows=n_windows,
@@ -103,10 +116,10 @@ def run(
 def bench(
     dataset: str = typer.Argument(..., help="Benchmark dataset: m3, m4, or tourism."),
     group: str = typer.Option(None, "--group", help="Optional sub-group, e.g. 'Monthly' for M3."),
-    output_dir: Path = typer.Option(Path("bench/results"), "--output-dir", "-o"),
+    output_dir: Path = typer.Option(Path("bench_results"), "--output-dir", "-o"),
 ) -> None:
     """Run freecast against a public M-competition dataset and report accuracy."""
-    from bench.runner import run_benchmark
+    from freecast.bench.runner import run_benchmark
 
     result = run_benchmark(dataset=dataset, group=group, output_dir=output_dir)
     typer.echo(result)

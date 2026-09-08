@@ -130,18 +130,18 @@ Published M3 competition results (overall average across all 3,003 series):
 | AutoARIMA | 13.57 | 1.45 |
 
 freecast, run end-to-end (validate → classify → CV-select → conformal
-forecast) against the real M3 data, one dataset download, ~6m19s total on a
+forecast) against the real M3 data, one dataset download, ~25.8m total on a
 single laptop-class VM, zero series dropped:
 
 | Group | n | sMAPE | MASE | Time |
 |---|---|---|---|---|
-| Yearly | 645 | 18.02 | 3.04 | 36.2s |
-| Quarterly | 756 | 9.72 | 1.15 | 106.9s |
-| Monthly | 1,428 | 15.32 | 0.95 | 159.6s |
-| Other | 174 | 4.56 | 1.91 | 68.4s |
-| **Overall (weighted)** | **3,003** | **13.87** | **1.50** | **~6m19s** |
+| Yearly | 645 | 18.02 | 3.04 | 72.3s |
+| Quarterly | 756 | 9.72 | 1.15 | 225.3s |
+| Monthly | 1,428 | 14.50 | 0.85 | 1,199.9s |
+| Other | 174 | 4.52 | 1.91 | 52.5s |
+| **Overall (weighted)** | **3,003** | **13.47** | **1.46** | **~25.8m** |
 
-freecast's overall sMAPE (13.87) and MASE (1.50) land in the same band as
+freecast's overall sMAPE (13.47) and MASE (1.46) land in the same band as
 Theta, ForecastPro, ETS, and AutoARIMA above — competitive with, though not
 quite beating, the best M3 entrants, from a from-scratch CV-based
 model-selection pipeline with zero per-series tuning. (Yearly is the
@@ -150,12 +150,33 @@ hardest M3 category for every entrant, ours included — short series and a
 numbers above are directly reproducible with `freecast bench m3 --group
 Yearly`.)
 
+**A correctness note, in the interest of the "verify it yourself" pitch
+actually meaning something:** an earlier internal run of this same harness
+reported Monthly at sMAPE 15.32 / MASE 0.95 and a ~6m19s total. Both were
+artifacts of a bug where the season length (12 for monthly data) was never
+actually reaching the model pool — every M3 group was silently fit with no
+seasonality at all, and the run was faster only because non-seasonal model
+fits are cheaper. Fixing it (`freecast.freq.resolve_freq`, plus an explicit
+`season_length` override in `ForecastEngine` for cases — like M3's "Other"
+group, whose dates are synthetic — where the periodicity implied by a
+timestamp's frequency doesn't reflect anything real in the data) changed
+Monthly meaningfully (a genuine ~10% MASE improvement once seasonal models
+are actually seasonal) and left Yearly, Quarterly, and Other essentially
+unchanged, which is exactly what should happen: Yearly has no sub-annual
+periodicity to find either way, Quarterly's models evidently found the
+4-period seasonality made no difference to their own AIC-selected
+specification, and Other's dates are fabricated (no real calendar meaning),
+so a spurious weekly period from the fix's own default inference had to be
+overridden back to 1 rather than trusted. The current numbers above are
+this corrected run.
+
 Run `freecast bench m3` yourself to reproduce these numbers, or break them
 down by frequency group with `freecast bench m3 --group Monthly`. Raw
-per-group output: [`bench/results/m3_summary.json`](bench/results/m3_summary.json).
+per-group output:
+[`src/freecast/bench/results/m3_summary.json`](src/freecast/bench/results/m3_summary.json).
 
-M4 and Tourism harnesses are stubbed out in `bench/` for a follow-up; M5 is
-out of scope for now given its size.
+M4 and Tourism harnesses are stubbed out in `src/freecast/bench/` for a
+follow-up; M5 is out of scope for now given its size.
 
 ## Optional: zero-shot foundation model candidate
 
@@ -238,17 +259,18 @@ adjustments, that isn't earning its keep.
 
 ```
 src/freecast/
-├── contract.py       # data validation — fails loudly on bad input
-├── intermittent.py   # ADI/CV² intermittent-demand classification
-├── selection.py       # cross-validation-driven model selection
-├── intervals.py       # conformal prediction interval builder
-├── foundation.py       # optional t0 zero-shot foundation-model candidate
-├── overrides.py         # planner override log with a durable audit trail
-├── fva.py                 # Forecast Value Added scoring
-├── engine.py                # orchestrates the forecasting pipeline
-└── cli.py                     # the `freecast` command
-bench/                            # M-competition benchmark harness
-tests/                             # pytest suite
+├── freq.py          # canonical pandas-/Polars-style frequency handling
+├── contract.py      # data validation — fails loudly on bad input
+├── intermittent.py  # ADI/CV² intermittent-demand classification
+├── selection.py     # cross-validation-driven model selection
+├── intervals.py     # conformal prediction interval builder
+├── foundation.py    # optional t0 zero-shot foundation-model candidate
+├── overrides.py     # planner override log with a durable audit trail
+├── fva.py           # Forecast Value Added scoring
+├── engine.py        # orchestrates the forecasting pipeline
+├── cli.py           # the `freecast` command
+└── bench/           # M-competition benchmark harness
+tests/                # pytest suite
 ```
 
 The engine is a plain Python library with a thin CLI wrapper — nothing in

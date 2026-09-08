@@ -5,17 +5,17 @@
     "n_series": 645,
     "n_dropped": 0,
     "smape": 18.018797712308444,
-    "mase": 3.0368771206993923,
-    "seconds_elapsed": 36.20581126213074,
+    "mase": 3.0368771206993936,
+    "seconds_elapsed": 72.32027244567871,
     "model_counts": {
+      "ADIDA": 24,
       "TSB": 1,
       "AutoARIMA": 166,
-      "AutoETS": 127,
-      "AutoCES": 176,
-      "CrostonSBA": 1,
-      "AutoTheta": 124,
       "IMAPA": 26,
-      "ADIDA": 24
+      "AutoCES": 176,
+      "AutoTheta": 124,
+      "AutoETS": 127,
+      "CrostonSBA": 1
     }
   },
   {
@@ -25,14 +25,14 @@
     "n_dropped": 0,
     "smape": 9.724466258372292,
     "mase": 1.1547193085273204,
-    "seconds_elapsed": 106.88276171684265,
+    "seconds_elapsed": 225.28664207458496,
     "model_counts": {
-      "AutoARIMA": 218,
-      "AutoTheta": 149,
+      "AutoETS": 180,
       "IMAPA": 2,
       "AutoCES": 206,
       "CrostonClassic": 1,
-      "AutoETS": 180
+      "AutoARIMA": 218,
+      "AutoTheta": 149
     }
   },
   {
@@ -40,18 +40,18 @@
     "group": "Monthly",
     "n_series": 1428,
     "n_dropped": 0,
-    "smape": 15.317615163956152,
-    "mase": 0.9479373969540729,
-    "seconds_elapsed": 159.626122713089,
+    "smape": 14.497087337833161,
+    "mase": 0.8499685982682716,
+    "seconds_elapsed": 1199.852667093277,
     "model_counts": {
-      "AutoARIMA": 405,
-      "AutoCES": 342,
-      "AutoTheta": 333,
+      "CrostonSBA": 8,
       "ADIDA": 9,
-      "AutoETS": 317,
+      "AutoTheta": 368,
+      "AutoETS": 330,
       "IMAPA": 13,
       "TSB": 1,
-      "CrostonSBA": 8
+      "AutoARIMA": 407,
+      "AutoCES": 292
     }
   },
   {
@@ -59,14 +59,14 @@
     "group": "Other",
     "n_series": 174,
     "n_dropped": 0,
-    "smape": 4.561957484161767,
-    "mase": 1.909662078391526,
-    "seconds_elapsed": 68.38162469863892,
+    "smape": 4.524124382970568,
+    "mase": 1.9097143691915603,
+    "seconds_elapsed": 52.50006341934204,
     "model_counts": {
-      "AutoETS": 37,
-      "AutoARIMA": 49,
-      "AutoTheta": 39,
-      "AutoCES": 49
+      "AutoETS": 31,
+      "AutoARIMA": 46,
+      "AutoTheta": 46,
+      "AutoCES": 51
     }
   }
 ]

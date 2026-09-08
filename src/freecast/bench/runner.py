@@ -1,6 +1,6 @@
 """Runs the freecast engine against M3 / M4 / Tourism and reports accuracy.
 
-Usage: ``freecast bench m3`` (or ``python -m bench.runner m3``).
+Usage: ``freecast bench m3`` (or ``python -m freecast.bench.runner m3``).
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import polars as pl
 
-from bench.published_results import M3_OVERALL
+from freecast.bench.published_results import M3_OVERALL
 from freecast.engine import ForecastEngine
 
 DEFAULT_DATA_DIR = Path(__file__).parent / "data"
@@ -88,7 +88,14 @@ def run_m3_group(group: str, data_dir: Path = DEFAULT_DATA_DIR) -> BenchSummary:
     test_df = pl.concat(test_parts)
 
     t0 = time.time()
-    engine = ForecastEngine(h=h, freq=freq, n_windows=2, min_history=h + 2, on_error="drop")
+    engine = ForecastEngine(
+        h=h,
+        freq=freq,
+        season_length=season_length,
+        n_windows=2,
+        min_history=h + 2,
+        on_error="drop",
+    )
     result = engine.run(train_df)
     elapsed = time.time() - t0
 
@@ -167,4 +174,4 @@ if __name__ == "__main__":
     import sys
 
     dataset = sys.argv[1] if len(sys.argv) > 1 else "m3"
-    print(run_benchmark(dataset, None, Path("bench/results")))
+    print(run_benchmark(dataset, None, Path("bench_results")))

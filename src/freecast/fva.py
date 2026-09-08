@@ -22,6 +22,8 @@ import polars as pl
 from statsforecast import StatsForecast
 from statsforecast.models import Naive, SeasonalNaive
 
+from freecast.freq import resolve_freq
+
 SUPPORTED_METRICS = ("mae", "mape")
 
 
@@ -66,7 +68,7 @@ def compute_fva(
     train_df: long-format (unique_id, ds, y) history used to fit the naive baseline.
     forecasts: (unique_id, ds, y_hat) — the statistical forecast being evaluated.
     actuals: (unique_id, ds, y) — realized values for the forecast period.
-    freq: pandas-style frequency string (or integer step).
+    freq: pandas- or Polars-style frequency string (or integer step).
     season_length: seasonal period for the naive baseline; 1 uses plain Naive,
         otherwise SeasonalNaive.
     overrides: optional (unique_id, ds, override_y_hat) — e.g. from
@@ -82,7 +84,7 @@ def compute_fva(
         if season_length <= 1
         else SeasonalNaive(season_length=season_length, alias="naive")
     )
-    sf = StatsForecast(models=[naive_model], freq=freq, n_jobs=-1)
+    sf = StatsForecast(models=[naive_model], freq=resolve_freq(freq).polars, n_jobs=-1)
     naive_wide = sf.forecast(h=h, df=train_df).rename({"naive": "naive_y_hat"})
 
     eval_df = actuals.join(

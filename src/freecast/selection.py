@@ -87,7 +87,8 @@ def select_models(
     ----------
     df: long-format (unique_id, ds, y) frame, already contract-validated.
     h: forecast horizon, also used as the CV step/test window size.
-    freq: pandas-style frequency string (or integer step) for the series.
+    freq: Polars-style frequency string (or integer step) for the series —
+        i.e. ``ResolvedFreq.polars`` from ``freecast.freq.resolve_freq``.
     season_length: seasonal period used by seasonal models and MASE/RMSSE scaling.
     models: candidate model instances; defaults to the regular ETS/ARIMA/Theta/CES pool.
     n_windows: number of rolling-origin CV windows to backtest across.
