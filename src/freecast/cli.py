@@ -49,6 +49,15 @@ def run(
     ),
     on_error: str = typer.Option("raise", "--on-error", help="'raise' or 'drop' invalid series."),
     n_jobs: int = typer.Option(-1, "--n-jobs", help="Parallel workers; -1 uses all cores."),
+    use_foundation_model: bool = typer.Option(
+        False,
+        "--use-foundation-model",
+        help=(
+            "Also try The Forecasting Company's t0 zero-shot model as a candidate "
+            "(requires the 'foundation' extra and Hugging Face access; only supports "
+            "--levels of 80 and/or 50)."
+        ),
+    ),
 ) -> None:
     """Run the full freecast pipeline on a series file and write results to OUTPUT_DIR."""
     level_list = tuple(int(x) for x in levels.split(","))
@@ -63,6 +72,7 @@ def run(
         min_history=min_history,
         on_error=on_error,
         n_jobs=n_jobs,
+        use_foundation_model=use_foundation_model,
     )
     result = engine.run(df)
 

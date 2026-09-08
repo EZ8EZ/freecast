@@ -63,6 +63,7 @@ class ForecastEngine:
         min_history: int = 6,
         on_error: str = "raise",
         n_jobs: int = -1,
+        use_foundation_model: bool = False,
     ) -> None:
         self.h = h
         self.freq = freq
@@ -73,6 +74,7 @@ class ForecastEngine:
         self.on_error = on_error
         self.n_jobs = n_jobs
         self.season_length = infer_season_length(freq)
+        self.use_foundation_model = use_foundation_model
 
     def run(self, df: pl.DataFrame) -> ForecastResult:
         clean_df, report = contract.validate(
@@ -97,10 +99,27 @@ class ForecastEngine:
                 metric=self.metric,
                 n_jobs=self.n_jobs,
             )
+
+            t0_forecast = None
+            if self.use_foundation_model:
+                foundation_acc, t0_forecast = selection.evaluate_foundation_model(
+                    regular_df,
+                    h=self.h,
+                    freq=self.freq,
+                    season_length=self.season_length,
+                    levels=tuple(self.levels),
+                    metric=self.metric,
+                )
+                reg_sel = selection.merge_foundation_candidate(reg_sel, foundation_acc)
+
             selection_parts.append(reg_sel.best_model)
             forecast_parts.append(
                 self._forecast_group(
-                    regular_df, reg_models, reg_sel.best_model, has_native_intervals=True
+                    regular_df,
+                    reg_models,
+                    reg_sel.best_model,
+                    has_native_intervals=True,
+                    extra_forecast=t0_forecast,
                 )
             )
 
@@ -140,6 +159,7 @@ class ForecastEngine:
         best_model: pl.DataFrame,
         *,
         has_native_intervals: bool,
+        extra_forecast: pl.DataFrame | None = None,
     ) -> pl.DataFrame:
         model_names = [getattr(m, "alias", type(m).__name__) for m in models]
         sf = StatsForecast(models=models, freq=self.freq, n_jobs=self.n_jobs)
@@ -160,6 +180,10 @@ class ForecastEngine:
             n_windows = max(min(max(self.n_windows, 2), max_feasible_windows), 2)
             ci = build_conformal_intervals(h=self.h, n_windows=n_windows)
             wide = sf.forecast(h=self.h, df=df, level=self.levels, prediction_intervals=ci)
+        if extra_forecast is not None:
+            wide = wide.join(extra_forecast, on=["unique_id", "ds"], how="full", coalesce=True)
+            model_names = [*model_names, "T0"]
+
         wide = wide.join(best_model.select(["unique_id", "model"]), on="unique_id", how="left")
 
         y_col = pl.coalesce(

@@ -157,6 +157,36 @@ per-group output: [`bench/results/m3_summary.json`](bench/results/m3_summary.jso
 M4 and Tourism harnesses are stubbed out in `bench/` for a follow-up; M5 is
 out of scope for now given its size.
 
+## Optional: zero-shot foundation model candidate
+
+freecast can optionally include [t0](https://github.com/theforecastingcompany/tfc-t0)
+— The Forecasting Company's ~102M-parameter, Apache-2.0, zero-shot
+foundation model — as an extra candidate in the regular-series pool,
+competing on the same backtested accuracy metric as AutoETS/AutoARIMA/
+AutoTheta/AutoCES. Since it needs no per-series training, it's a natural
+fit for series with too little history to backtest a statistical model
+against reliably.
+
+```bash
+pip install "freecast[foundation]"
+```
+
+t0's weights live in a gated Hugging Face repo: request access on the
+[model page](https://huggingface.co/theforecastingcompany/t0-alpha), then
+run `hf auth login`. freecast never bundles or auto-downloads weights.
+
+```python
+engine = ForecastEngine(h=12, freq="MS", use_foundation_model=True)
+```
+
+or `freecast run ... --use-foundation-model`. t0 only ever emits five fixed
+quantiles (0.1/0.25/0.5/0.75/0.9), so it can only serve prediction-interval
+levels derivable from that set — 80 and/or 50; requesting any other level
+makes it ineligible as a candidate for that run rather than erroring.
+If the extra isn't installed, or Hugging Face access isn't set up, freecast
+degrades gracefully to the statistical pool alone — this is exercised in
+`tests/test_engine.py`.
+
 ## Architecture
 
 ```
@@ -165,10 +195,11 @@ src/freecast/
 ├── intermittent.py   # ADI/CV² intermittent-demand classification
 ├── selection.py       # cross-validation-driven model selection
 ├── intervals.py       # conformal prediction interval builder
-├── engine.py           # orchestrates the above into one call
-└── cli.py               # the `freecast` command
-bench/                    # M-competition benchmark harness
-tests/                     # pytest suite
+├── foundation.py       # optional t0 zero-shot foundation-model candidate
+├── engine.py             # orchestrates the above into one call
+└── cli.py                 # the `freecast` command
+bench/                        # M-competition benchmark harness
+tests/                         # pytest suite
 ```
 
 The engine is a plain Python library with a thin CLI wrapper — nothing in
