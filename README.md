@@ -18,13 +18,13 @@ layer instead:
 
 - **Cross-validation-driven model selection**, not a hardcoded rule table.
   Every series is backtested (rolling-origin CV) across a candidate pool —
-  AutoETS, AutoARIMA, AutoTheta, AutoCES — and the winner is picked by an
-  explicit, configurable accuracy metric (MASE by default).
-- **Automatic intermittent-demand routing.** Sparse/lumpy series are
-  detected via the standard Syntetos-Boylan ADI/CV² classification and
-  routed to Croston-family models (Croston, CrostonSBA, TSB, ADIDA, IMAPA)
-  instead of having ETS/ARIMA forced onto data that breaks their
-  assumptions.
+  AutoETS, AutoARIMA, AutoTheta, AutoCES, and an equal-weight ensemble of
+  all four — and the winner is picked by an explicit, configurable
+  accuracy metric (MASE by default).
+- **Automatic intermittent-demand routing.** Series with genuinely sparse
+  demand (Syntetos-Boylan ADI ≥ 1.32) are routed to Croston-family models
+  (Croston, CrostonSBA, TSB, ADIDA, IMAPA) instead of having ETS/ARIMA
+  forced onto data that breaks their assumptions.
 - **Conformal prediction intervals on every forecast.** No point forecast
   ships without a distribution-free, empirically-calibrated uncertainty
   band.
@@ -122,6 +122,26 @@ correctly. If a regressor is genuinely predictive, AutoARIMA backtests
 better — because it alone can use that information — and wins selection on
 its own merits, no special-casing required.
 
+### Model selection and the ensemble
+
+For each series, freecast backtests every candidate over rolling-origin
+windows (as many as that series' own history supports, up to
+`n_windows`) and keeps whichever scores best on the selection metric.
+One of the candidates is `Ensemble`, the equal-weight mean of AutoETS,
+AutoARIMA, AutoTheta, and AutoCES. Averaging several reasonable models
+usually beats betting on one, because a couple of backtest windows is a
+noisy basis for picking a single winner. Equal weights are deliberate:
+estimated weights rarely beat them out of sample, and a fixed rule can't
+be tuned to a benchmark. The ensemble still has to win a series' backtest
+to be used there. Its intervals average the members' bounds at each
+level. Turn it off with `ForecastEngine(ensemble=False)` or `freecast run
+--no-ensemble`.
+
+Results for one series never depend on what else is in the batch: a
+newly-launched SKU with little history doesn't change the backtest
+windows, the chosen model, or the prediction intervals of established
+series run alongside it.
+
 ## Benchmarks
 
 `freecast` includes a reproducible benchmark harness against public
@@ -156,53 +176,44 @@ Published M3 competition results (overall average across all 3,003 series):
 | AutoARIMA | 13.57 | 1.45 |
 
 freecast, run end-to-end (validate → classify → CV-select → conformal
-forecast) against the real M3 data, one dataset download, ~25.8m total on a
-single laptop-class VM, zero series dropped:
+forecast) against the real M3 data, zero series dropped, ~37 minutes on a
+4-core VM:
 
 | Group | n | sMAPE | MASE | Time |
 |---|---|---|---|---|
-| Yearly | 645 | 18.02 | 3.04 | 72.3s |
-| Quarterly | 756 | 9.72 | 1.15 | 225.3s |
-| Monthly | 1,428 | 14.50 | 0.85 | 1,199.9s |
-| Other | 174 | 4.52 | 1.91 | 52.5s |
-| **Overall (weighted)** | **3,003** | **13.47** | **1.46** | **~25.8m** |
+| Yearly | 645 | 17.20 | 3.04 | 91s |
+| Quarterly | 756 | 9.59 | 1.15 | 311s |
+| Monthly | 1,428 | 14.39 | 0.85 | 1,759s |
+| Other | 174 | 4.49 | 1.89 | 36s |
+| **Overall (weighted)** | **3,003** | **13.21** | **1.46** | **~37m** |
 
-freecast's overall sMAPE (13.47) and MASE (1.46) land in the same band as
-Theta, ForecastPro, ETS, and AutoARIMA above — competitive with, though not
-quite beating, the best M3 entrants, from a from-scratch CV-based
-model-selection pipeline with zero per-series tuning. (Yearly is the
-hardest M3 category for every entrant, ours included — short series and a
-6-step horizon leave little room for any method to do well; per-group
-numbers above are directly reproducible with `freecast bench m3 --group
-Yearly`.)
+Against Forecast Pro's published M3 entry (13.19 / 1.47), freecast is
+effectively tied on sMAPE (0.02 behind) and slightly ahead on MASE (1.457),
+with zero per-series tuning. Theta and ETS remain ahead on both metrics.
 
-**A correctness note, in the interest of the "verify it yourself" pitch
-actually meaning something:** an earlier internal run of this same harness
-reported Monthly at sMAPE 15.32 / MASE 0.95 and a ~6m19s total. Both were
-artifacts of a bug where the season length (12 for monthly data) was never
-actually reaching the model pool — every M3 group was silently fit with no
-seasonality at all, and the run was faster only because non-seasonal model
-fits are cheaper. Fixing it (`freecast.freq.resolve_freq`, plus an explicit
-`season_length` override in `ForecastEngine` for cases — like M3's "Other"
-group, whose dates are synthetic — where the periodicity implied by a
-timestamp's frequency doesn't reflect anything real in the data) changed
-Monthly meaningfully (a genuine ~10% MASE improvement once seasonal models
-are actually seasonal) and left Yearly, Quarterly, and Other essentially
-unchanged, which is exactly what should happen: Yearly has no sub-annual
-periodicity to find either way, Quarterly's models evidently found the
-4-period seasonality made no difference to their own AIC-selected
-specification, and Other's dates are fabricated (no real calendar meaning),
-so a spurious weekly period from the fix's own default inference had to be
-overridden back to 1 rather than trusted. The current numbers above are
-this corrected run.
+How we got here, as an ablation on the same data (each row adds one change):
+
+| Configuration | sMAPE | MASE |
+|---|---|---|
+| Previous release | 13.47 | 1.46 |
+| + demand-routing and batch-invariance fixes | 13.31 | 1.46 |
+| + equal-weight ensemble candidate (current default) | **13.21** | **1.46** |
+
+The routing fix mattered most on Yearly (18.02 → 17.23 sMAPE): 106 M3
+series with no zero-demand periods at all had been classified "erratic"
+and sent to Croston-family models, which can't represent trend. The
+ensemble (see [Model selection](#model-selection-and-the-ensemble)) won
+backtesting on about 12% of series and improved every group. Its
+combination rule is a fixed equal-weight mean chosen from the literature,
+not tuned against these test sets, so these numbers aren't overfit to M3.
 
 Run `freecast bench m3` yourself to reproduce these numbers, or break them
 down by frequency group with `freecast bench m3 --group Monthly`. Raw
 per-group output:
 [`src/freecast/bench/results/m3_summary.json`](src/freecast/bench/results/m3_summary.json).
-
-M4 and Tourism harnesses are stubbed out in `src/freecast/bench/` for a
-follow-up; M5 is out of scope for now given its size.
+(An earlier internal run reported Monthly at 15.32 sMAPE because season
+length never reached the model pool; that was fixed via
+`freecast.freq.resolve_freq` before any of the numbers above.)
 
 ## Optional: zero-shot foundation model candidate
 

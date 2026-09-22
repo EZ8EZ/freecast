@@ -4,18 +4,15 @@
     "group": "Yearly",
     "n_series": 645,
     "n_dropped": 0,
-    "smape": 18.018797712308444,
-    "mase": 3.0368771206993936,
-    "seconds_elapsed": 72.32027244567871,
+    "smape": 17.198914060290154,
+    "mase": 3.0420511777685983,
+    "seconds_elapsed": 90.54165863990784,
     "model_counts": {
-      "ADIDA": 24,
-      "TSB": 1,
-      "AutoARIMA": 166,
-      "IMAPA": 26,
-      "AutoCES": 176,
-      "AutoTheta": 124,
-      "AutoETS": 127,
-      "CrostonSBA": 1
+      "Ensemble": 68,
+      "AutoTheta": 123,
+      "AutoARIMA": 157,
+      "AutoCES": 186,
+      "AutoETS": 111
     }
   },
   {
@@ -23,16 +20,15 @@
     "group": "Quarterly",
     "n_series": 756,
     "n_dropped": 0,
-    "smape": 9.724466258372292,
-    "mase": 1.1547193085273204,
-    "seconds_elapsed": 225.28664207458496,
+    "smape": 9.58607785077376,
+    "mase": 1.1503212474980364,
+    "seconds_elapsed": 310.61929988861084,
     "model_counts": {
-      "AutoETS": 180,
-      "IMAPA": 2,
-      "AutoCES": 206,
-      "CrostonClassic": 1,
-      "AutoARIMA": 218,
-      "AutoTheta": 149
+      "Ensemble": 75,
+      "AutoTheta": 125,
+      "AutoARIMA": 210,
+      "AutoETS": 161,
+      "AutoCES": 185
     }
   },
   {
@@ -40,18 +36,15 @@
     "group": "Monthly",
     "n_series": 1428,
     "n_dropped": 0,
-    "smape": 14.497087337833161,
-    "mase": 0.8499685982682716,
-    "seconds_elapsed": 1199.852667093277,
+    "smape": 14.38693670332776,
+    "mase": 0.8513427974969935,
+    "seconds_elapsed": 1758.742868900299,
     "model_counts": {
-      "CrostonSBA": 8,
-      "ADIDA": 9,
-      "AutoTheta": 368,
-      "AutoETS": 330,
-      "IMAPA": 13,
-      "TSB": 1,
-      "AutoARIMA": 407,
-      "AutoCES": 292
+      "AutoARIMA": 388,
+      "AutoCES": 262,
+      "AutoTheta": 282,
+      "AutoETS": 291,
+      "Ensemble": 205
     }
   },
   {
@@ -59,14 +52,15 @@
     "group": "Other",
     "n_series": 174,
     "n_dropped": 0,
-    "smape": 4.524124382970568,
-    "mase": 1.9097143691915603,
-    "seconds_elapsed": 52.50006341934204,
+    "smape": 4.49442970626185,
+    "mase": 1.8848558627140652,
+    "seconds_elapsed": 36.40033197402954,
     "model_counts": {
-      "AutoETS": 31,
-      "AutoARIMA": 46,
-      "AutoTheta": 46,
-      "AutoCES": 51
+      "AutoARIMA": 41,
+      "AutoETS": 27,
+      "AutoCES": 49,
+      "AutoTheta": 34,
+      "Ensemble": 23
     }
   }
 ]
