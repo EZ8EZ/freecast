@@ -141,3 +141,27 @@ def test_ignores_non_scaled_metric() -> None:
         jump_threshold=99,
     )
     assert report.summary == {}
+
+
+def test_large_jump_ignores_seasonal_trough_at_end_of_history() -> None:
+    # A seasonal series whose history ends on its low point: the forecast
+    # (back up to normal levels) differs hugely from the single last actual,
+    # but not from the recent h-period average. That's not an exception.
+    season = [100.0, 150.0, 200.0, 150.0, 100.0, 20.0]
+    train = pl.DataFrame(
+        {
+            "unique_id": ["s"] * 24,
+            "ds": [dt.date(2020, 1, 1) + dt.timedelta(days=i) for i in range(24)],
+            "y": season * 4,
+        }
+    )
+    forecasts = pl.DataFrame(
+        {
+            "unique_id": ["s"] * 6,
+            "ds": [dt.date(2020, 1, 25) + dt.timedelta(days=i) for i in range(6)],
+            "y_hat": season,
+        }
+    )
+    selection = pl.DataFrame({"unique_id": ["s"], "model": ["AutoETS"], "mase": [0.5]})
+    report = find_exceptions(train, forecasts, selection)
+    assert "large_jump" not in report.summary

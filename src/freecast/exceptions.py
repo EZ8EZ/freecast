@@ -29,8 +29,8 @@ fraction of the point forecast — a wide band relative to the number itself,
 i.e. freecast is telling you it isn't confident."""
 
 DEFAULT_JUMP_THRESHOLD = 0.5
-"""Flag when the forecast's mean over the horizon differs from the series'
-last known actual by more than this fraction."""
+"""Flag when the forecast's mean over the horizon differs from the mean of
+the series' last h actuals (same window length) by more than this fraction."""
 
 _SCALED_METRICS = {"mase", "rmsse"}
 
@@ -63,7 +63,7 @@ def find_exceptions(
     Parameters
     ----------
     train_df: the (unique_id, ds, y) history the forecast was built from —
-        used for the "large jump vs. last actual" flag.
+        used for the "large jump vs. recent actuals" flag.
     forecasts: a freecast forecasts frame (unique_id, ds, y_hat, lo-<level>,
         hi-<level>, ...).
     selection: a freecast selection frame (unique_id, model, <metric>).
@@ -103,19 +103,27 @@ def find_exceptions(
         flag_frames.append(wide.select(["unique_id", pl.lit("wide_interval").alias("flag")]))
         diagnostics.append(wide)
 
-    last_actual = (
-        train_df.sort(["unique_id", "ds"])
-        .group_by("unique_id")
-        .agg(pl.col("y").last().alias("last_actual"))
-    )
+    # Compare like with like: the forecast's mean over its h periods against
+    # the mean of the last h actuals. A single last actual would flag every
+    # seasonal series whose history happens to end on a peak or trough.
     mean_forecast = forecasts.group_by("unique_id").agg(
-        pl.col("y_hat").mean().alias("mean_forecast")
+        pl.col("y_hat").mean().alias("mean_forecast"), pl.len().alias("_h")
     )
-    jump = mean_forecast.join(last_actual, on="unique_id").with_columns(
-        (
-            (pl.col("mean_forecast") - pl.col("last_actual")).abs()
-            / pl.col("last_actual").abs().clip(lower_bound=1e-9)
-        ).alias("relative_jump")
+    recent = (
+        train_df.sort(["unique_id", "ds"])
+        .join(mean_forecast.select(["unique_id", "_h"]), on="unique_id")
+        .group_by("unique_id")
+        .agg(pl.col("y").tail(pl.col("_h").first()).mean().alias("recent_actual_mean"))
+    )
+    jump = (
+        mean_forecast.drop("_h")
+        .join(recent, on="unique_id")
+        .with_columns(
+            (
+                (pl.col("mean_forecast") - pl.col("recent_actual_mean")).abs()
+                / pl.col("recent_actual_mean").abs().clip(lower_bound=1e-9)
+            ).alias("relative_jump")
+        )
     )
     jumped = jump.filter(pl.col("relative_jump") > jump_threshold)
     flag_frames.append(jumped.select(["unique_id", pl.lit("large_jump").alias("flag")]))

@@ -301,7 +301,7 @@ report.summary   # {"poor_accuracy": 12, "wide_interval": 4, "large_jump": 7}
 Four flags, each opt-out via its own threshold: `poor_accuracy` (CV MASE/RMSSE
 above 1.0 — no better than naive), `wide_interval` (prediction interval wider
 than half the point forecast), `large_jump` (forecast mean differs from the
-last actual by more than 50%), and `demand_type_changed` (optional — pass a
+mean of the last h actuals by more than 50%), and `demand_type_changed` (optional — pass a
 prior run's demand classification to flag series that crossed the
 regular/intermittent boundary). Results are ranked by how many flags fired.
 

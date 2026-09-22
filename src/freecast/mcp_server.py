@@ -455,7 +455,7 @@ class GetExceptionsInput(BaseModel):
     )
     jump_threshold: float = Field(
         default=0.5,
-        description="Flag when the forecast mean differs from the last actual "
+        description="Flag when the forecast mean differs from the mean of the last h actuals "
         "by more than this fraction.",
     )
     prior_classification_path: str | None = Field(
@@ -471,7 +471,7 @@ class GetExceptionsInput(BaseModel):
     annotations=READ_ONLY,
     description=(
         "Flag series worth a planner's review at scale: poor CV accuracy, wide prediction "
-        "intervals, a big jump vs. the last actual, or (optionally) a changed demand-type "
+        "intervals, a big jump vs. recent actuals, or (optionally) a changed demand-type "
         "classification. Every flag is independently interpretable, not a black-box score."
     ),
 )
