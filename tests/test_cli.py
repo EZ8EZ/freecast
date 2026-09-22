@@ -123,3 +123,57 @@ def test_cli_fva(tmp_path: Path):
     )
     assert result.exit_code == 0, result.output
     assert "statistical_fva" in result.output
+
+
+def test_cli_reconcile(tmp_path: Path):
+    import datetime
+
+    import numpy as np
+    import polars as pl
+
+    rng = np.random.default_rng(0)
+    n = 48
+    dates = []
+    y, m = 2020, 1
+    for _ in range(n):
+        dates.append(datetime.date(y, m, 1))
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+
+    rows = []
+    for cat in ["A", "B"]:
+        for region in ["X", "Y"]:
+            base = 100 + (20 if cat == "B" else 0) + (10 if region == "Y" else 0)
+            for i, d in enumerate(dates):
+                val = base + 10 * np.sin(i / 12 * 2 * np.pi) + rng.normal(0, 3)
+                rows.append({"category": cat, "region": region, "ds": d, "y": val})
+    input_path = tmp_path / "hierarchy.csv"
+    pl.DataFrame(rows).write_csv(input_path)
+    output_dir = tmp_path / "out"
+
+    result = runner.invoke(
+        app,
+        [
+            "reconcile",
+            str(input_path),
+            "--hierarchy",
+            "category,region",
+            "--horizon",
+            "6",
+            "--freq",
+            "1mo",
+            "--output-dir",
+            str(output_dir),
+            "--cv-windows",
+            "1",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Reconciled 6 series across 2 hierarchy levels" in result.output
+    assert (output_dir / "reconciled_forecasts.parquet").exists()
+
+    forecasts = pl.read_parquet(output_dir / "reconciled_forecasts.parquet")
+    assert "y_hat/BottomUp" in forecasts.columns
+    assert set(forecasts["unique_id"].unique().to_list()) == {"A", "B", "A/X", "A/Y", "B/X", "B/Y"}

@@ -255,6 +255,31 @@ that layer beat its baseline; negative means it made the forecast worse —
 the standard evidence base for retiring an override layer, or a planner's
 adjustments, that isn't earning its keep.
 
+## Hierarchical reconciliation
+
+Planners don't forecast one SKU in isolation — a region or category total
+needs to equal the sum of its SKU-level forecasts, or the number is useless
+for S&OP and finance review. Forecasting every level independently produces
+*incoherent* totals; `freecast.hierarchy` fixes that by forecasting every
+level with the same engine (each level is just another synthetic series to
+it) and reconciling with [`hierarchicalforecast`](https://github.com/Nixtla/hierarchicalforecast)
+(Apache-2.0), defaulting to MinTrace with structural scaling — a standard,
+well-behaved method that needs only actuals, not in-sample residuals.
+
+```python
+from freecast.hierarchy import reconcile
+
+result = reconcile(df, spec=[["category"], ["category", "region"]], h=12, freq="MS")
+result.forecasts   # unique_id, ds, y_hat, y_hat/BottomUp, y_hat/MinTrace_method-wls_struct
+```
+
+or `freecast reconcile sales.csv --hierarchy category,region --horizon 12
+--freq MS` — every prefix of `--hierarchy`'s columns becomes a level, bottom
+level included automatically. `freecast.hierarchy.check_coherence()` verifies
+the property reconciliation exists to guarantee: every aggregate equals the
+sum of its children, which the unreconciled per-level forecast generally
+does not.
+
 ## Architecture
 
 ```
@@ -267,6 +292,7 @@ src/freecast/
 ├── foundation.py    # optional t0 zero-shot foundation-model candidate
 ├── overrides.py     # planner override log with a durable audit trail
 ├── fva.py           # Forecast Value Added scoring
+├── hierarchy.py     # hierarchical reconciliation (coherent multi-level forecasts)
 ├── engine.py        # orchestrates the forecasting pipeline
 ├── cli.py           # the `freecast` command
 └── bench/           # M-competition benchmark harness
@@ -279,11 +305,9 @@ scripts, notebooks, services, or (later) an MCP server without rework.
 
 ## Roadmap (not in this repo yet)
 
-Phase 1 (the core engine) and the override/audit-trail/FVA workflow layer are
-here. Deliberately **not** included yet:
+Phase 1 (the core engine), the override/audit-trail/FVA workflow layer, and
+hierarchical reconciliation are here. Deliberately **not** included yet:
 
-- **Hierarchical reconciliation.** Rolling SKU-level forecasts up through
-  product/region/company hierarchies with coherent totals.
 - **An MCP server for natural-language access.** Not a hosted chatbot or a
   bundled UI — a thin MCP layer over this same engine, so any MCP-aware
   client can drive it conversationally.

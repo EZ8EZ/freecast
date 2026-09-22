@@ -212,5 +212,45 @@ def fva(
         typer.echo(str(result.per_series))
 
 
+@app.command()
+def reconcile(
+    input_path: Path = typer.Argument(
+        ..., help="CSV or Parquet with hierarchy grouping columns, ds, y."
+    ),
+    hierarchy: str = typer.Option(
+        ...,
+        "--hierarchy",
+        help=(
+            "Comma-separated grouping columns, top level to bottom, e.g. "
+            "'category,region' — every prefix becomes a hierarchy level."
+        ),
+    ),
+    horizon: int = typer.Option(..., "--horizon", "-h"),
+    freq: str = typer.Option(..., "--freq", "-f"),
+    output_dir: Path = typer.Option(Path("freecast_output"), "--output-dir", "-o"),
+    n_windows: int = typer.Option(2, "--cv-windows"),
+) -> None:
+    """Forecast and reconcile a product/region/etc. hierarchy so every level sums coherently."""
+    from freecast.hierarchy import reconcile as reconcile_hierarchy
+
+    columns = hierarchy.split(",")
+    spec = [columns[: i + 1] for i in range(len(columns))]
+    df = _read(input_path)
+
+    result = reconcile_hierarchy(df, spec, h=horizon, freq=freq, n_windows=n_windows)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _write(result.forecasts, output_dir / "reconciled_forecasts.parquet")
+    _write(result.engine_result.selection, output_dir / "model_selection.parquet")
+
+    n_levels = len(result.tags)
+    n_series = result.aggregated["unique_id"].n_unique()
+    typer.echo(
+        f"Reconciled {n_series} series across {n_levels} hierarchy levels "
+        f"({', '.join(spec[-1])}) at horizon={horizon}, freq={freq!r}."
+    )
+    typer.echo(f"Wrote reconciled_forecasts, model_selection to {output_dir}/")
+
+
 if __name__ == "__main__":
     app()

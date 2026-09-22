@@ -20,6 +20,7 @@ classifiers = [
 dependencies = [
     "statsforecast>=2.0.0,<3.0.0",
     "utilsforecast>=0.2.0,<0.3.0",
+    "hierarchicalforecast>=1.5.0,<2.0.0",
     "polars>=1.0.0,<2.0.0",
     "duckdb>=1.0.0,<2.0.0",
     "pyarrow>=17.0.0",
