@@ -26,6 +26,7 @@ a real promo/price effect.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from typing import Any
 
@@ -246,7 +247,6 @@ class ForecastEngine:
         X_df: pl.DataFrame | None = None,
     ) -> pl.DataFrame:
         model_names = [getattr(m, "alias", type(m).__name__) for m in models]
-        sf = StatsForecast(models=models, freq=self._freq_polars, n_jobs=self.n_jobs)
 
         # Conformal intervals need >= 2 full backtest windows of length h left
         # over after fitting; on very short series (some M3 Yearly series
@@ -255,17 +255,43 @@ class ForecastEngine:
         # fallback in that case. Croston-family models have no such
         # fallback — they only know how to produce intervals conformally —
         # but they tolerate short series fine, so they always go the
-        # conformal route.
-        min_len = df.group_by("unique_id").agg(pl.len().alias("n")).select(pl.col("n").min()).item()
-        max_feasible_windows = (min_len - 1) // self.h - 1
-        if has_native_intervals and max_feasible_windows < 2:
-            wide = sf.forecast(h=self.h, df=df, level=self.levels, X_df=X_df)
+        # conformal route. Feasibility is decided per series, not per batch:
+        # otherwise one newly-launched SKU would silently switch every other
+        # series in the run from conformal to parametric intervals.
+        feasible = df.group_by("unique_id").agg(((pl.len() - 1) // self.h - 1).alias("max_windows"))
+        if has_native_intervals:
+            partitions = [
+                feasible.filter(pl.col("max_windows") >= 2),
+                feasible.filter(pl.col("max_windows") < 2),
+            ]
         else:
-            n_windows = max(min(max(self.n_windows, 2), max_feasible_windows), 2)
-            ci = build_conformal_intervals(h=self.h, n_windows=n_windows)
-            wide = sf.forecast(
-                h=self.h, df=df, level=self.levels, prediction_intervals=ci, X_df=X_df
+            partitions = [feasible]
+
+        wide_parts = []
+        for part in partitions:
+            if part.height == 0:
+                continue
+            ids = part["unique_id"].to_list()
+            part_df = df.filter(pl.col("unique_id").is_in(ids))
+            part_X = X_df.filter(pl.col("unique_id").is_in(ids)) if X_df is not None else None
+            max_windows = part["max_windows"].min()
+            assert isinstance(max_windows, int)
+            # statsforecast stores the conformal spec on the model objects
+            # themselves, so each partition needs its own copies.
+            sf = StatsForecast(
+                models=copy.deepcopy(models), freq=self._freq_polars, n_jobs=self.n_jobs
             )
+            if has_native_intervals and max_windows < 2:
+                wide_parts.append(sf.forecast(h=self.h, df=part_df, level=self.levels, X_df=part_X))
+                continue
+            n_windows = max(min(max(self.n_windows, 2), max_windows), 2)
+            ci = build_conformal_intervals(h=self.h, n_windows=n_windows)
+            wide_parts.append(
+                sf.forecast(
+                    h=self.h, df=part_df, level=self.levels, prediction_intervals=ci, X_df=part_X
+                )
+            )
+        wide = pl.concat(wide_parts, how="vertical")
         if extra_forecast is not None:
             wide = wide.join(extra_forecast, on=["unique_id", "ds"], how="full", coalesce=True)
             model_names = [*model_names, "T0"]

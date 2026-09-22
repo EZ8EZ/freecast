@@ -8,6 +8,7 @@ system" — encoded as a measurement, not a rule table.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from typing import Any
 
@@ -100,34 +101,56 @@ def select_models(
     pool = models if models is not None else default_regular_models(season_length)
     model_names = [getattr(m, "alias", type(m).__name__) for m in pool]
 
-    min_len = df.group_by("unique_id").agg(pl.len().alias("n")).select(pl.col("n").min()).item()
-    required = h * (n_windows + 1) + 1
-    if min_len < required:
-        n_windows = max(1, (min_len - h - 1) // h) if min_len > h + 1 else 1
-        n_windows = max(1, min(n_windows, 2))
-
-    sf = StatsForecast(models=pool, freq=freq, n_jobs=n_jobs)
-    cv_df = sf.cross_validation(h=h, df=df, n_windows=n_windows)
-
-    metric_fn = METRIC_FNS[metric]
-    kwargs = (
-        {"df": cv_df, "models": model_names, "train_df": df}
-        if metric in SCALED_METRICS
-        else {
-            "df": cv_df,
-            "models": model_names,
-        }
-    )
-    if metric in SCALED_METRICS:
-        kwargs["seasonality"] = season_length
-
-    acc = metric_fn(**kwargs)
-    acc_long = acc.unpivot(
-        index="unique_id", on=model_names, variable_name="model", value_name=metric
-    )
+    cv_df = backtest(df, h=h, freq=freq, models=pool, n_windows=n_windows, n_jobs=n_jobs)
+    acc_long = score_backtest(cv_df, df, model_names, metric=metric, season_length=season_length)
 
     best = _pick_best(acc_long, metric)
     return SelectionResult(best_model=best, cv_accuracy=acc_long, metric=metric)
+
+
+def backtest(
+    df: pl.DataFrame,
+    *,
+    h: int,
+    freq: str | int,
+    models: list[Any],
+    n_windows: int,
+    n_jobs: int = -1,
+) -> pl.DataFrame:
+    """Rolling-origin CV, with the window count decided per series.
+
+    Each series gets as many windows (up to ``n_windows``) as its own
+    history supports. Deciding this batch-wide would let one newly-launched
+    SKU cut every other series in the run down to a single, noisier
+    backtest window — and silently change which model they get.
+    """
+    windows = df.group_by("unique_id").agg(
+        ((pl.len() - h - 1) // h).clip(1, max(n_windows, 1)).alias("w")
+    )
+    parts = []
+    for (w,), bucket in windows.group_by("w"):
+        bucket_df = df.filter(pl.col("unique_id").is_in(bucket["unique_id"].to_list()))
+        sf = StatsForecast(models=copy.deepcopy(models), freq=freq, n_jobs=n_jobs)
+        parts.append(sf.cross_validation(h=h, df=bucket_df, n_windows=int(w)))
+    return pl.concat(parts, how="vertical")
+
+
+def score_backtest(
+    cv_df: pl.DataFrame,
+    train_df: pl.DataFrame,
+    model_names: list[str],
+    *,
+    metric: str,
+    season_length: int,
+) -> pl.DataFrame:
+    """Score a wide CV frame into a long (unique_id, model, <metric>) table."""
+    metric_fn = METRIC_FNS[metric]
+    kwargs: dict[str, Any] = {"df": cv_df, "models": model_names}
+    if metric in SCALED_METRICS:
+        kwargs["train_df"] = train_df
+        kwargs["seasonality"] = season_length
+    acc = metric_fn(**kwargs)
+    return acc.unpivot(index="unique_id", on=model_names, variable_name="model", value_name=metric)
 
 
 def _pick_best(acc_long: pl.DataFrame, metric: str) -> pl.DataFrame:
@@ -137,9 +160,13 @@ def _pick_best(acc_long: pl.DataFrame, metric: str) -> pl.DataFrame:
     non-negative error where lower is strictly better.
     """
     rank_col = acc_long[metric].abs() if metric == "bias" else acc_long[metric]
+    # A model that couldn't be scored (null/NaN) must never outrank one that
+    # could; Polars sorts nulls first by default. If no model scored, the
+    # stable sort keeps pool order, so the first pool model is the fallback.
+    rank_col = rank_col.fill_nan(None)
     ranked = acc_long.with_columns(rank_col.alias("_rank"))
     return (
-        ranked.sort(["unique_id", "_rank"])
+        ranked.sort(["unique_id", "_rank"], nulls_last=True, maintain_order=True)
         .group_by("unique_id", maintain_order=True)
         .first()
         .drop("_rank")

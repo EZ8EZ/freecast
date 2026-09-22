@@ -197,3 +197,28 @@ def test_engine_skips_foundation_model_when_regressors_present(monkeypatch):
     engine = ForecastEngine(h=h, freq="MS", n_windows=1, use_foundation_model=True)
     result = engine.run(df, X_df=x_df)
     assert result.selection.row(0, named=True)["model"] != "T0"
+
+
+def test_short_new_series_does_not_change_other_series(regular_series_df):
+    # A newly-launched SKU with little history must not change the model
+    # selection or prediction intervals of established series in the same
+    # batch (it used to cut every series to one CV window and force
+    # parametric instead of conformal intervals for all of them).
+    rng = np.random.default_rng(7)
+    last = regular_series_df["ds"].max()
+    new_dates = _future_months(last, 14)
+    new_sku = pl.DataFrame(
+        {"unique_id": "new_sku", "ds": new_dates, "y": 50 + rng.normal(0, 3, 14)}
+    )
+    # Shift the established series so all series end on the same date.
+    engine = ForecastEngine(h=6, freq="MS", levels=(80,))
+    established = regular_series_df.with_columns(pl.col("ds").dt.offset_by("14mo"))
+    alone = engine.run(established)
+    mixed = engine.run(pl.concat([established, new_sku]))
+
+    cols = ["unique_id", "ds", "model", "y_hat", "lo-80", "hi-80"]
+    ids = established["unique_id"].unique().to_list()
+    a = alone.forecasts.filter(pl.col("unique_id").is_in(ids)).sort(["unique_id", "ds"])
+    m = mixed.forecasts.filter(pl.col("unique_id").is_in(ids)).sort(["unique_id", "ds"])
+    assert a.select(cols).equals(m.select(cols))
+    assert mixed.forecasts.filter(pl.col("unique_id") == "new_sku").height == 6

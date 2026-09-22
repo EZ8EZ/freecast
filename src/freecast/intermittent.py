@@ -10,8 +10,15 @@ Classification (Syntetos & Boylan, 2005):
 
     ADI < 1.32, CV^2 < 0.49   -> smooth       (regular models)
     ADI >= 1.32, CV^2 < 0.49  -> intermittent (Croston-family)
-    ADI < 1.32, CV^2 >= 0.49  -> erratic      (Croston-family)
+    ADI < 1.32, CV^2 >= 0.49  -> erratic      (regular models)
     ADI >= 1.32, CV^2 >= 0.49 -> lumpy        (Croston-family)
+
+Only the ADI axis decides routing. Croston-family models exist to handle
+zero-demand periods; an "erratic" series has few or no zeros, and its high
+CV^2 usually comes from trend or level shifts, which Croston/ADIDA/IMAPA
+can't represent at all (on a zero-free series Croston reduces to simple
+exponential smoothing). Those series stay with the trend-capable regular
+pool. The four-way category is still reported for planners.
 """
 
 from __future__ import annotations
@@ -22,6 +29,7 @@ import polars as pl
 
 ADI_THRESHOLD = 1.32
 CV2_THRESHOLD = 0.49
+INTERMITTENT_CATEGORIES = ("intermittent", "lumpy")
 
 
 @dataclass(frozen=True)
@@ -33,7 +41,7 @@ class DemandClassification:
 
     @property
     def is_intermittent(self) -> bool:
-        return self.category != "smooth"
+        return self.category in INTERMITTENT_CATEGORIES
 
 
 def classify_series(df: pl.DataFrame) -> pl.DataFrame:
@@ -93,14 +101,16 @@ def split_by_demand_type(
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Split a series frame into (regular, intermittent) sub-frames.
 
-    "Regular" series are classified "smooth"; everything else (intermittent,
-    erratic, lumpy) is routed to Croston-family models.
+    "intermittent" and "lumpy" series (ADI >= 1.32) go to Croston-family
+    models; "smooth" and "erratic" series go to the regular pool (see the
+    module docstring for why erratic isn't routed to Croston).
     """
     if classification is None:
         classification = classify_series(df)
 
-    regular_ids = classification.filter(pl.col("category") == "smooth")["unique_id"].to_list()
-    intermittent_ids = classification.filter(pl.col("category") != "smooth")["unique_id"].to_list()
+    is_int = pl.col("category").is_in(list(INTERMITTENT_CATEGORIES))
+    regular_ids = classification.filter(~is_int)["unique_id"].to_list()
+    intermittent_ids = classification.filter(is_int)["unique_id"].to_list()
 
     regular_df = df.filter(pl.col("unique_id").is_in(regular_ids))
     intermittent_df = df.filter(pl.col("unique_id").is_in(intermittent_ids))
