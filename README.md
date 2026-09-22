@@ -281,6 +281,34 @@ that layer beat its baseline; negative means it made the forecast worse —
 the standard evidence base for retiring an override layer, or a planner's
 adjustments, that isn't earning its keep.
 
+## Exception reporting
+
+At thousands-of-SKU scale nobody reviews every forecast. Forecast Pro sells
+"exception reporting" as a named feature for exactly this reason; `freecast`
+surfaces the same idea as a data query, not a dashboard — a handful of
+independently-thresholded, independently-interpretable flags per series, so
+a planner challenged on "why is this flagged" gets a specific answer, not
+"the model said so."
+
+```python
+from freecast.exceptions import find_exceptions
+
+report = find_exceptions(train_df, result.forecasts, result.selection)
+report.flagged   # unique_id, flags, n_flags, plus the diagnostic columns each flag used
+report.summary   # {"poor_accuracy": 12, "wide_interval": 4, "large_jump": 7}
+```
+
+Four flags, each opt-out via its own threshold: `poor_accuracy` (CV MASE/RMSSE
+above 1.0 — no better than naive), `wide_interval` (prediction interval wider
+than half the point forecast), `large_jump` (forecast mean differs from the
+last actual by more than 50%), and `demand_type_changed` (optional — pass a
+prior run's demand classification to flag series that crossed the
+regular/intermittent boundary). Results are ranked by how many flags fired.
+
+or `freecast exceptions --train sales.csv --output-dir freecast_output`
+against a prior `freecast run`'s output, or `freecast_get_exceptions` from
+the MCP server.
+
 ## Hierarchical reconciliation
 
 Planners don't forecast one SKU in isolation — a region or category total
@@ -318,10 +346,11 @@ else in this README uses:
 freecast mcp
 ```
 
-Six tools cover the full loop: `freecast_run_forecast` / `freecast_get_forecast`
+Seven tools cover the full loop: `freecast_run_forecast` / `freecast_get_forecast`
 (run the engine, read results back without re-running), `freecast_add_override`
 / `freecast_list_overrides` (the audit trail), `freecast_get_fva_report`
-(did that override actually help?), and `freecast_reconcile_hierarchy`. Each
+(did that override actually help?), `freecast_reconcile_hierarchy`, and
+`freecast_get_exceptions` (which series need a planner's review). Each
 one is a direct wrapper around the corresponding library call — no new
 forecasting logic lives in `mcp_server.py` — and large results are written to
 disk with a capped, filterable inline preview rather than dumped whole into
@@ -345,6 +374,7 @@ src/freecast/
 ├── overrides.py     # planner override log with a durable audit trail
 ├── fva.py           # Forecast Value Added scoring
 ├── hierarchy.py     # hierarchical reconciliation (coherent multi-level forecasts)
+├── exceptions.py     # rule-based exception reporting for planner review
 ├── engine.py        # orchestrates the forecasting pipeline
 ├── mcp_server.py     # MCP server exposing the library to any MCP client
 ├── cli.py             # the `freecast` command

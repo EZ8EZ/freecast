@@ -255,6 +255,31 @@ def test_run_forecast_with_regressors(tmp_path):
     assert selection.row(0, named=True)["model"] == "AutoARIMA"
 
 
+def test_get_exceptions(tmp_path, series_csv):
+    out_dir = tmp_path / "out"
+    _call(
+        "freecast_run_forecast",
+        {
+            "input_path": str(series_csv),
+            "horizon": 6,
+            "freq": "MS",
+            "output_dir": str(out_dir),
+            "min_history": 6,
+        },
+    )
+
+    result = _call(
+        "freecast_get_exceptions",
+        {
+            "train_path": str(series_csv),
+            "output_dir": str(out_dir),
+            "accuracy_threshold": -1.0,
+        },
+    )
+    assert "poor_accuracy" in result["summary"]
+    assert result["flagged"]["row_count"] >= 1
+
+
 def test_run_forecast_missing_regressors_errors(tmp_path):
     input_path = tmp_path / "series.csv"
     pl.DataFrame(

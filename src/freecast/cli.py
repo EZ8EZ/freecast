@@ -8,6 +8,7 @@ from pathlib import Path
 import polars as pl
 import typer
 
+from freecast import exceptions as exceptions_mod
 from freecast.engine import ForecastEngine
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
@@ -260,6 +261,57 @@ def reconcile(
         f"({', '.join(spec[-1])}) at horizon={horizon}, freq={freq!r}."
     )
     typer.echo(f"Wrote reconciled_forecasts, model_selection to {output_dir}/")
+
+
+@app.command()
+def exceptions(
+    train_path: Path = typer.Option(..., "--train", help="History the forecast was built from."),
+    output_dir: Path = typer.Option(
+        ..., "--output-dir", "-o", help="A directory written by `freecast run`."
+    ),
+    metric: str = typer.Option(
+        "mase", "--metric", help="Model-selection metric to flag on: mase|rmsse."
+    ),
+    accuracy_threshold: float = typer.Option(
+        exceptions_mod.DEFAULT_ACCURACY_THRESHOLD, "--accuracy-threshold"
+    ),
+    level: int = typer.Option(80, "--level", help="Prediction-interval level for the width flag."),
+    interval_width_threshold: float = typer.Option(
+        exceptions_mod.DEFAULT_INTERVAL_WIDTH_THRESHOLD, "--interval-width-threshold"
+    ),
+    jump_threshold: float = typer.Option(exceptions_mod.DEFAULT_JUMP_THRESHOLD, "--jump-threshold"),
+    prior_classification_path: Path = typer.Option(
+        None,
+        "--prior-classification",
+        help="A demand_classification.parquet from an earlier run, to flag category changes.",
+    ),
+) -> None:
+    """Flag series worth a planner's review: poor accuracy, wide intervals, big jumps."""
+    train_df = _read(train_path)
+    forecasts_df = pl.read_parquet(output_dir / "forecasts.parquet")
+    selection_df = pl.read_parquet(output_dir / "model_selection.parquet")
+
+    prior_classification = None
+    classification = None
+    if prior_classification_path is not None:
+        prior_classification = pl.read_parquet(prior_classification_path)
+        classification = pl.read_parquet(output_dir / "demand_classification.parquet")
+
+    report = exceptions_mod.find_exceptions(
+        train_df,
+        forecasts_df,
+        selection_df,
+        metric=metric,
+        accuracy_threshold=accuracy_threshold,
+        level=level,
+        interval_width_threshold=interval_width_threshold,
+        jump_threshold=jump_threshold,
+        prior_classification=prior_classification,
+        classification=classification,
+    )
+    typer.echo(f"Flagged {report.flagged.height} series: {report.summary}")
+    with pl.Config(tbl_rows=-1, tbl_cols=-1, tbl_width_chars=1000):
+        typer.echo(str(report.flagged))
 
 
 @app.command()

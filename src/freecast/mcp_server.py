@@ -438,6 +438,84 @@ def reconcile_hierarchy(params: ReconcileHierarchyInput) -> str:
     )
 
 
+class GetExceptionsInput(BaseModel):
+    """Input for flagging series that need a planner's review."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    train_path: str = Field(..., description="History the forecast was built from.")
+    output_dir: str = Field(..., description="The output_dir a prior freecast_run_forecast wrote.")
+    metric: Literal["mase", "rmsse"] = Field(
+        default="mase", description="Model-selection metric to flag on."
+    )
+    accuracy_threshold: float = Field(default=1.0, description="Above this metric value, flag.")
+    level: int = Field(default=80, description="Prediction-interval level for the width flag.")
+    interval_width_threshold: float = Field(
+        default=0.5, description="Flag when (hi-lo)/y_hat exceeds this fraction."
+    )
+    jump_threshold: float = Field(
+        default=0.5,
+        description="Flag when the forecast mean differs from the last actual "
+        "by more than this fraction.",
+    )
+    prior_classification_path: str | None = Field(
+        default=None,
+        description="A demand_classification.parquet from an earlier run, to flag category "
+        "changes against the current run's demand_classification.parquet in output_dir.",
+    )
+    limit: int = Field(default=500, ge=1, le=5000, description="Max rows returned inline.")
+
+
+@mcp.tool(
+    name="freecast_get_exceptions",
+    annotations=READ_ONLY,
+    description=(
+        "Flag series worth a planner's review at scale: poor CV accuracy, wide prediction "
+        "intervals, a big jump vs. the last actual, or (optionally) a changed demand-type "
+        "classification. Every flag is independently interpretable, not a black-box score."
+    ),
+)
+def get_exceptions(params: GetExceptionsInput) -> str:
+    """Run freecast.exceptions.find_exceptions over a completed run's outputs.
+
+    Returns a JSON string: {summary: {flag: count}, flagged: {row_count, truncated, rows}}.
+    """
+    from freecast.exceptions import find_exceptions
+
+    out = Path(params.output_dir)
+    train_df = _read_df(params.train_path)
+    forecasts_df = pl.read_parquet(out / "forecasts.parquet")
+    selection_df = pl.read_parquet(out / "model_selection.parquet")
+
+    prior_classification = None
+    classification = None
+    if params.prior_classification_path is not None:
+        prior_classification = _read_df(params.prior_classification_path)
+        classification = pl.read_parquet(out / "demand_classification.parquet")
+
+    report = find_exceptions(
+        train_df,
+        forecasts_df,
+        selection_df,
+        metric=params.metric,
+        accuracy_threshold=params.accuracy_threshold,
+        level=params.level,
+        interval_width_threshold=params.interval_width_threshold,
+        jump_threshold=params.jump_threshold,
+        prior_classification=prior_classification,
+        classification=classification,
+    )
+
+    return json.dumps(
+        {
+            "summary": report.summary,
+            "flagged": _to_json(report.flagged, limit=params.limit),
+        },
+        indent=2,
+        default=str,
+    )
+
+
 def main() -> None:
     mcp.run()
 

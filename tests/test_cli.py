@@ -239,6 +239,44 @@ def test_cli_run_with_regressors(tmp_path: Path):
     assert forecasts.height == h
 
 
+def test_cli_exceptions(tmp_path: Path, mixed_series_df):
+    input_path = tmp_path / "series.csv"
+    mixed_series_df.write_csv(input_path)
+    output_dir = tmp_path / "out"
+
+    run_result = runner.invoke(
+        app,
+        [
+            "run",
+            str(input_path),
+            "--horizon",
+            "6",
+            "--freq",
+            "1mo",
+            "--output-dir",
+            str(output_dir),
+            "--cv-windows",
+            "1",
+        ],
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    result = runner.invoke(
+        app,
+        [
+            "exceptions",
+            "--train",
+            str(input_path),
+            "--output-dir",
+            str(output_dir),
+            "--accuracy-threshold",
+            "-1",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Flagged" in result.output
+
+
 def test_cli_run_missing_regressors_fails(tmp_path: Path):
     import polars as pl
 
