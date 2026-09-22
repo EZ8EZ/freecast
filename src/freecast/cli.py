@@ -81,6 +81,14 @@ def run(
             "--levels of 80 and/or 50)."
         ),
     ),
+    ensemble: bool = typer.Option(
+        True,
+        "--ensemble/--no-ensemble",
+        help=(
+            "Score an equal-weight combination of the regular models as an extra "
+            "candidate; it's used for a series only if it wins that series' backtest."
+        ),
+    ),
     regressors_path: Path = typer.Option(
         None,
         "--regressors-path",
@@ -107,6 +115,7 @@ def run(
         on_error=on_error,
         n_jobs=n_jobs,
         use_foundation_model=use_foundation_model,
+        ensemble=ensemble,
     )
     result = engine.run(df, X_df=X_df)
 

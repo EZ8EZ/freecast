@@ -36,6 +36,7 @@ METRIC_FNS: dict[str, Any] = {
 SCALED_METRICS = {"mase", "rmsse"}
 
 DEFAULT_REGULAR_POOL = ("AutoETS", "AutoARIMA", "AutoTheta", "AutoCES")
+ENSEMBLE_NAME = "Ensemble"
 DEFAULT_INTERMITTENT_POOL = ("CrostonClassic", "CrostonSBA", "TSB", "ADIDA", "IMAPA")
 
 
@@ -81,6 +82,7 @@ def select_models(
     n_windows: int = 2,
     metric: str = "mase",
     n_jobs: int = -1,
+    ensemble: bool = False,
 ) -> SelectionResult:
     """Backtest ``models`` on ``df`` via rolling-origin CV and pick a winner per series.
 
@@ -94,6 +96,9 @@ def select_models(
     models: candidate model instances; defaults to the regular ETS/ARIMA/Theta/CES pool.
     n_windows: number of rolling-origin CV windows to backtest across.
     metric: one of "mase", "rmsse", "smape", "bias" — lower is better for all of them.
+    ensemble: also score an "Ensemble" candidate, the equal-weight mean of
+        every model in the pool (see ``add_ensemble``). It has to win CV on a
+        series like any other candidate to be selected.
     """
     if metric not in METRIC_FNS:
         raise ValueError(f"Unknown metric {metric!r}; choose one of {sorted(METRIC_FNS)}")
@@ -102,10 +107,41 @@ def select_models(
     model_names = [getattr(m, "alias", type(m).__name__) for m in pool]
 
     cv_df = backtest(df, h=h, freq=freq, models=pool, n_windows=n_windows, n_jobs=n_jobs)
+    if ensemble:
+        cv_df = add_ensemble(cv_df, model_names)
+        model_names = [*model_names, ENSEMBLE_NAME]
     acc_long = score_backtest(cv_df, df, model_names, metric=metric, season_length=season_length)
 
     best = _pick_best(acc_long, metric)
     return SelectionResult(best_model=best, cv_accuracy=acc_long, metric=metric)
+
+
+def add_ensemble(
+    wide: pl.DataFrame, members: list[str], levels: list[int] | tuple[int, ...] = ()
+) -> pl.DataFrame:
+    """Add an equal-weight combination of ``members`` as an "Ensemble" column.
+
+    Forecast combination is one of the most consistent findings in the
+    forecasting literature (Bates & Granger 1969 onward; the M3 and M4
+    competitions): averaging several reasonable models usually beats picking
+    one, because it hedges against choosing the wrong model on a few noisy
+    backtest windows. An equal-weight mean is used deliberately: estimated
+    combination weights rarely beat it out of sample (the "forecast
+    combination puzzle"), and it can't be overfit to a benchmark.
+
+    For each requested level the ensemble's interval bounds are the mean of
+    the members' bounds (quantile averaging, a.k.a. Vincentization), which
+    keeps each bound a proper quantile forecast at that level.
+    """
+    exprs = [pl.mean_horizontal(members).alias(ENSEMBLE_NAME)]
+    for level in levels:
+        for side in ("lo", "hi"):
+            exprs.append(
+                pl.mean_horizontal([f"{m}-{side}-{level}" for m in members]).alias(
+                    f"{ENSEMBLE_NAME}-{side}-{level}"
+                )
+            )
+    return wide.with_columns(exprs)
 
 
 def backtest(

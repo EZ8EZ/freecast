@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import polars as pl
+
 from freecast import selection
 from freecast.selection import default_intermittent_models, default_regular_models, select_models
 
@@ -37,8 +39,6 @@ def test_select_models_unknown_metric_raises(regular_series_df):
 
 
 def test_pick_best_never_prefers_unscored_model():
-    import polars as pl
-
     acc = pl.DataFrame(
         {
             "unique_id": ["a", "a", "a", "b", "b"],
@@ -51,3 +51,36 @@ def test_pick_best_never_prefers_unscored_model():
     assert picks["a"] == "AutoARIMA"
     # Nothing scored: fall back to the first model in pool order.
     assert picks["b"] == "AutoETS"
+
+
+def test_add_ensemble_is_equal_weight_mean_of_points_and_bounds():
+    wide = pl.DataFrame(
+        {
+            "unique_id": ["a"],
+            "A": [10.0],
+            "B": [20.0],
+            "A-lo-80": [8.0],
+            "B-lo-80": [12.0],
+            "A-hi-80": [12.0],
+            "B-hi-80": [30.0],
+        }
+    )
+    out = selection.add_ensemble(wide, ["A", "B"], [80]).row(0, named=True)
+    assert out["Ensemble"] == 15.0
+    assert out["Ensemble-lo-80"] == 10.0
+    assert out["Ensemble-hi-80"] == 21.0
+
+
+def test_select_models_scores_ensemble_candidate(regular_series_df):
+    result = select_models(
+        regular_series_df,
+        h=6,
+        freq="1mo",
+        season_length=12,
+        models=default_regular_models(season_length=12),
+        n_windows=2,
+        ensemble=True,
+    )
+    candidates = set(result.cv_accuracy["model"].unique().to_list())
+    assert selection.ENSEMBLE_NAME in candidates
+    assert result.cv_accuracy.filter(pl.col("model") == "Ensemble")["mase"].null_count() == 0

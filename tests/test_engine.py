@@ -222,3 +222,12 @@ def test_short_new_series_does_not_change_other_series(regular_series_df):
     m = mixed.forecasts.filter(pl.col("unique_id").is_in(ids)).sort(["unique_id", "ds"])
     assert a.select(cols).equals(m.select(cols))
     assert mixed.forecasts.filter(pl.col("unique_id") == "new_sku").height == 6
+
+
+def test_engine_ensemble_candidate_toggle(regular_series_df):
+    with_ens = ForecastEngine(h=6, freq="MS", levels=(80,)).run(regular_series_df)
+    without = ForecastEngine(h=6, freq="MS", levels=(80,), ensemble=False).run(regular_series_df)
+    assert "Ensemble" not in without.selection["model"].to_list()
+    for result in (with_ens, without):
+        assert result.forecasts.null_count().sum_horizontal().item() == 0
+        assert (result.forecasts["lo-80"] <= result.forecasts["hi-80"]).all()

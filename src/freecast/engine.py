@@ -68,8 +68,13 @@ class ForecastEngine:
         on_error: str = "raise",
         n_jobs: int = -1,
         use_foundation_model: bool = False,
+        ensemble: bool = True,
     ) -> None:
         """
+        ensemble: add an equal-weight combination of the regular models
+            (AutoETS/AutoARIMA/AutoTheta/AutoCES) as a selection candidate —
+            see ``selection.add_ensemble``. It's chosen for a series only if
+            it wins that series' cross-validation.
         season_length: override the seasonal period used by seasonal models
             and MASE/RMSSE scaling. By default this is inferred from ``freq``
             (e.g. 12 for monthly data), which is right for genuine calendar
@@ -92,6 +97,7 @@ class ForecastEngine:
         self.n_jobs = n_jobs
         self.season_length = season_length if season_length is not None else resolved.season_length
         self.use_foundation_model = use_foundation_model
+        self.ensemble = ensemble
 
     def run(self, df: pl.DataFrame, X_df: pl.DataFrame | None = None) -> ForecastResult:
         """Run the pipeline. ``X_df`` supplies known future values for any
@@ -122,6 +128,7 @@ class ForecastEngine:
                 n_windows=self.n_windows,
                 metric=self.metric,
                 n_jobs=self.n_jobs,
+                ensemble=self.ensemble,
             )
 
             # t0 has no mechanism for the future-known regressors X_df
@@ -157,6 +164,7 @@ class ForecastEngine:
                     has_native_intervals=True,
                     extra_forecast=t0_forecast,
                     X_df=reg_X_df,
+                    ensemble=self.ensemble,
                 )
             )
 
@@ -245,6 +253,7 @@ class ForecastEngine:
         has_native_intervals: bool,
         extra_forecast: pl.DataFrame | None = None,
         X_df: pl.DataFrame | None = None,
+        ensemble: bool = False,
     ) -> pl.DataFrame:
         model_names = [getattr(m, "alias", type(m).__name__) for m in models]
 
@@ -292,6 +301,9 @@ class ForecastEngine:
                 )
             )
         wide = pl.concat(wide_parts, how="vertical")
+        if ensemble:
+            wide = selection.add_ensemble(wide, model_names, self.levels)
+            model_names = [*model_names, selection.ENSEMBLE_NAME]
         if extra_forecast is not None:
             wide = wide.join(extra_forecast, on=["unique_id", "ds"], how="full", coalesce=True)
             model_names = [*model_names, "T0"]

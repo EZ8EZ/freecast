@@ -91,6 +91,11 @@ class RunForecastInput(BaseModel):
     on_error: Literal["raise", "drop"] = Field(
         default="raise", description="'raise' aborts on invalid series; 'drop' excludes them."
     )
+    ensemble: bool = Field(
+        default=True,
+        description="Also score an equal-weight combination of the regular models as a "
+        "candidate; used for a series only if it wins that series' backtest.",
+    )
     regressors_path: str | None = Field(
         default=None,
         description="CSV/Parquet with known future values (unique_id, ds, plus every extra "
@@ -126,6 +131,7 @@ def run_forecast(params: RunForecastInput) -> str:
         metric=params.metric,
         min_history=params.min_history,
         on_error=params.on_error,
+        ensemble=params.ensemble,
     )
     result = engine.run(df, X_df=X_df)
 

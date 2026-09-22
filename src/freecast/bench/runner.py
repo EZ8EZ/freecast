@@ -9,6 +9,7 @@ import json
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
@@ -73,7 +74,11 @@ def _mase(y_true, y_hat, y_train, season_length: int) -> float:
     return float(np.abs(y_true - y_hat).mean() / scale)
 
 
-def run_m3_group(group: str, data_dir: Path = DEFAULT_DATA_DIR) -> BenchSummary:
+def run_m3_group(
+    group: str, data_dir: Path = DEFAULT_DATA_DIR, **engine_kwargs: Any
+) -> BenchSummary:
+    """Benchmark one M3 group. ``engine_kwargs`` pass through to ForecastEngine
+    (e.g. ``ensemble=False``) for ablations."""
     if group not in M3_GROUPS:
         raise ValueError(f"Unknown M3 group {group!r}; choose one of {sorted(M3_GROUPS)}")
     h, freq, season_length = M3_GROUPS[group]
@@ -95,6 +100,7 @@ def run_m3_group(group: str, data_dir: Path = DEFAULT_DATA_DIR) -> BenchSummary:
         n_windows=2,
         min_history=h + 2,
         on_error="drop",
+        **engine_kwargs,
     )
     result = engine.run(train_df)
     elapsed = time.time() - t0
