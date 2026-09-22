@@ -252,5 +252,13 @@ def reconcile(
     typer.echo(f"Wrote reconciled_forecasts, model_selection to {output_dir}/")
 
 
+@app.command()
+def mcp() -> None:
+    """Start the freecast MCP server (stdio transport) for MCP-aware clients to attach to."""
+    from freecast.mcp_server import main as run_mcp_server
+
+    run_mcp_server()
+
+
 if __name__ == "__main__":
     app()

@@ -30,9 +30,9 @@ layer instead:
   band.
 - **Batch scale.** Tens of thousands of independent series, one call,
   vectorized/parallel execution on a laptop.
-- **Headless by design.** A library and a thin CLI on top of it. No GUI, no
-  bundled dashboard — this is meant to be called from your own pipeline, or
-  eventually from an MCP server (see Roadmap).
+- **Headless by design.** A library, a thin CLI, and an MCP server on top of
+  it. No GUI, no bundled dashboard — this is meant to be called from your own
+  pipeline, or conversationally from any MCP-aware client.
 
 `freecast` is built on the [Nixtla](https://github.com/Nixtla) ecosystem
 (`statsforecast`, `utilsforecast`), [Polars](https://pola.rs), and
@@ -280,6 +280,32 @@ the property reconciliation exists to guarantee: every aggregate equals the
 sum of its children, which the unreconciled per-level forecast generally
 does not.
 
+## MCP server: natural-language access
+
+`freecast` ships an [MCP](https://modelcontextprotocol.io) server so any
+MCP-aware client (Claude Code, Claude Desktop, etc.) can drive the whole
+workflow conversationally, pointed at your local project files — no hosted
+chatbot, no bundled UI, just a thin layer over the same library everything
+else in this README uses:
+
+```bash
+freecast mcp
+```
+
+Six tools cover the full loop: `freecast_run_forecast` / `freecast_get_forecast`
+(run the engine, read results back without re-running), `freecast_add_override`
+/ `freecast_list_overrides` (the audit trail), `freecast_get_fva_report`
+(did that override actually help?), and `freecast_reconcile_hierarchy`. Each
+one is a direct wrapper around the corresponding library call — no new
+forecasting logic lives in `mcp_server.py` — and large results are written to
+disk with a capped, filterable inline preview rather than dumped whole into
+context.
+
+Point your MCP client's config at `freecast mcp` (stdio transport) and ask
+things like *"forecast next quarter for sales.csv at monthly granularity"*,
+*"override SKU123's March forecast to 180, the regional promo is
+confirmed"*, or *"did last month's overrides actually help accuracy?"*
+
 ## Architecture
 
 ```
@@ -294,23 +320,24 @@ src/freecast/
 ├── fva.py           # Forecast Value Added scoring
 ├── hierarchy.py     # hierarchical reconciliation (coherent multi-level forecasts)
 ├── engine.py        # orchestrates the forecasting pipeline
-├── cli.py           # the `freecast` command
-└── bench/           # M-competition benchmark harness
-tests/                # pytest suite
+├── mcp_server.py     # MCP server exposing the library to any MCP client
+├── cli.py             # the `freecast` command
+└── bench/               # M-competition benchmark harness
+tests/                    # pytest suite
 ```
 
-The engine is a plain Python library with a thin CLI wrapper — nothing in
-it assumes a particular calling convention, so it stays cleanly usable from
-scripts, notebooks, services, or (later) an MCP server without rework.
+The engine is a plain Python library with a thin CLI wrapper and an MCP
+server on top of it — nothing in the core assumes a particular calling
+convention, so it stays cleanly usable from scripts, notebooks, services, or
+conversationally without rework.
 
-## Roadmap (not in this repo yet)
+## Roadmap
 
-Phase 1 (the core engine), the override/audit-trail/FVA workflow layer, and
-hierarchical reconciliation are here. Deliberately **not** included yet:
-
-- **An MCP server for natural-language access.** Not a hosted chatbot or a
-  bundled UI — a thin MCP layer over this same engine, so any MCP-aware
-  client can drive it conversationally.
+The originally scoped feature set — the core engine, the override/audit-trail/
+FVA workflow layer, hierarchical reconciliation, and the MCP server — is all
+here. Ideas for what's next (not started): a hosted/multi-tenant deployment
+option, richer collaborative consensus workflows across sales/ops/finance,
+and M4/Tourism bench harnesses to match the M3 one.
 
 ## License
 
