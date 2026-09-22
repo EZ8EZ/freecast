@@ -134,7 +134,7 @@ def run(
 
 @app.command()
 def bench(
-    dataset: str = typer.Argument(..., help="Benchmark dataset: m3, m4, or tourism."),
+    dataset: str = typer.Argument(..., help="Benchmark dataset: m3 or tourism."),
     group: str = typer.Option(None, "--group", help="Optional sub-group, e.g. 'Monthly' for M3."),
     output_dir: Path = typer.Option(Path("bench_results"), "--output-dir", "-o"),
 ) -> None:
