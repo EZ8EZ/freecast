@@ -12,6 +12,7 @@ import copy
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 import polars as pl
 from statsforecast import StatsForecast
 from statsforecast.models import (
@@ -24,6 +25,7 @@ from statsforecast.models import (
     AutoTheta,
     CrostonClassic,
     CrostonSBA,
+    Naive,
 )
 from utilsforecast.losses import bias, mase, rmsse, smape
 
@@ -57,6 +59,23 @@ def default_intermittent_models() -> list[Any]:
         ADIDA(alias="ADIDA"),
         IMAPA(alias="IMAPA"),
     ]
+
+
+class Unfittable(Naive):
+    """statsforecast fallback that marks a failed fit as NaN instead of hiding it.
+
+    statsforecast aborts the whole batch when one model can't be fit on one
+    series (e.g. AutoETS raises on a handful of points), unless a
+    ``fallback_model`` is given, and a fallback's output is stored under the
+    failed model's name. A naive fallback would therefore be mislabeled as,
+    say, AutoETS. Returning NaN instead keeps the batch running while making
+    the failure visible: an unscored model can never win selection, and the
+    engine replaces a NaN forecast with an explicitly labeled Naive one.
+    """
+
+    def forecast(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        res = super().forecast(*args, **kwargs)
+        return {k: np.full_like(v, np.nan, dtype=float) for k, v in res.items()}
 
 
 @dataclass
@@ -166,7 +185,9 @@ def backtest(
     parts = []
     for (w,), bucket in windows.group_by("w"):
         bucket_df = df.filter(pl.col("unique_id").is_in(bucket["unique_id"].to_list()))
-        sf = StatsForecast(models=copy.deepcopy(models), freq=freq, n_jobs=n_jobs)
+        sf = StatsForecast(
+            models=copy.deepcopy(models), freq=freq, n_jobs=n_jobs, fallback_model=Unfittable()
+        )
         parts.append(sf.cross_validation(h=h, df=bucket_df, n_windows=int(w)))
     return pl.concat(parts, how="vertical")
 

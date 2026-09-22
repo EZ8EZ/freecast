@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import polars as pl
 
 from freecast import selection
@@ -84,3 +85,16 @@ def test_select_models_scores_ensemble_candidate(regular_series_df):
     candidates = set(result.cv_accuracy["model"].unique().to_list())
     assert selection.ENSEMBLE_NAME in candidates
     assert result.cv_accuracy.filter(pl.col("model") == "Ensemble")["mase"].null_count() == 0
+
+
+def test_unfittable_fallback_marks_failure_as_nan():
+    import numpy as np
+
+    out = selection.Unfittable().forecast(y=np.arange(5.0), h=3, level=[80])
+    assert set(out) == {"mean", "lo-80", "hi-80"}
+    assert all(np.isnan(v).all() for v in out.values())
+
+
+def test_ensemble_is_nan_when_a_member_failed():
+    wide = pl.DataFrame({"unique_id": ["a"], "A": [10.0], "B": [float("nan")]})
+    assert np.isnan(selection.add_ensemble(wide, ["A", "B"]).row(0, named=True)["Ensemble"])

@@ -231,3 +231,70 @@ def test_engine_ensemble_candidate_toggle(regular_series_df):
     for result in (with_ens, without):
         assert result.forecasts.null_count().sum_horizontal().item() == 0
         assert (result.forecasts["lo-80"] <= result.forecasts["hi-80"]).all()
+
+
+def _yearly(uid: str, start: int, values) -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "unique_id": uid,
+            "ds": [datetime.date(start + k, 1, 1) for k in range(len(values))],
+            "y": [float(v) for v in values],
+        }
+    )
+
+
+def test_series_too_short_for_some_models_does_not_crash_batch():
+    # 7 points at h=4 leaves 3 training points in the backtest window, where
+    # AutoETS raises "tiny datasets". That used to abort the entire batch.
+    rng = np.random.default_rng(3)
+    established = [_yearly(f"s{i}", 1980, 100 + np.cumsum(rng.normal(2, 5, 30))) for i in range(3)]
+    tiny = _yearly("tiny", 2003, [50, 55, 53, 60, 62, 61, 66])
+    engine = ForecastEngine(h=4, freq="1y", season_length=1, min_history=6, levels=(80,))
+
+    mixed = engine.run(pl.concat([*established, tiny]))
+    alone = engine.run(pl.concat(established))
+
+    value_cols = ["y_hat", "lo-80", "hi-80"]
+    assert mixed.forecasts.select(value_cols).null_count().sum_horizontal().item() == 0
+    assert not any(mixed.forecasts[c].is_nan().any() for c in value_cols)
+    tiny_model = mixed.selection.filter(pl.col("unique_id") == "tiny")["model"].item()
+    assert tiny_model != "AutoETS"  # it failed to fit, so it can't have been chosen
+
+    cols = ["unique_id", "ds", "model", *value_cols]
+    ids = [f"s{i}" for i in range(3)]
+    assert (
+        mixed.forecasts.filter(pl.col("unique_id").is_in(ids))
+        .select(cols)
+        .sort(["unique_id", "ds"])
+        .equals(alone.forecasts.select(cols).sort(["unique_id", "ds"]))
+    )
+
+
+def test_unfittable_series_gets_explicit_naive_forecast(monkeypatch):
+    # With only AutoETS in the pool, a 5-point series can't be fit at all.
+    from statsforecast.models import AutoETS
+
+    monkeypatch.setattr(
+        selection,
+        "default_regular_models",
+        lambda season_length: [AutoETS(season_length=1, alias="AutoETS")],
+    )
+    df = pl.concat(
+        [
+            _yearly("ok", 1990, 100 + np.arange(20) * 2.0),
+            _yearly("short", 2010, [10, 12, 11, 13, 14]),
+        ]
+    )
+    engine = ForecastEngine(
+        h=2, freq="1y", season_length=1, min_history=4, levels=(80,), ensemble=False
+    )
+    result = engine.run(df)
+
+    short = result.forecasts.filter(pl.col("unique_id") == "short")
+    assert short["model"].to_list() == ["Naive", "Naive"]
+    assert short["y_hat"].to_list() == [14.0, 14.0]
+    assert not short["lo-80"].is_nan().any()
+    sel = result.selection.filter(pl.col("unique_id") == "short").row(0, named=True)
+    assert sel["model"] == "Naive"
+    assert sel["mase"] is None
+    assert result.selection.filter(pl.col("unique_id") == "ok")["model"].item() == "AutoETS"

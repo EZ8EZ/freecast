@@ -165,3 +165,24 @@ def test_large_jump_ignores_seasonal_trough_at_end_of_history() -> None:
     selection = pl.DataFrame({"unique_id": ["s"], "model": ["AutoETS"], "mase": [0.5]})
     report = find_exceptions(train, forecasts, selection)
     assert "large_jump" not in report.summary
+
+
+def test_no_backtest_flag_for_unscored_series() -> None:
+    selection = pl.DataFrame(
+        {
+            "unique_id": ["a", "b", "c"],
+            "model": ["AutoETS", "Naive", "AutoETS"],
+            "mase": [0.8, None, 0.9],
+        }
+    )
+    report = find_exceptions(
+        _train_df(),
+        _forecasts_df(),
+        selection,
+        interval_width_threshold=99,
+        jump_threshold=99,
+    )
+    assert report.summary == {"no_backtest": 1}
+    row = report.flagged.row(0, named=True)
+    assert row["unique_id"] == "b"
+    assert row["unscored_model"] == "Naive"

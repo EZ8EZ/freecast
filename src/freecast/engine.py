@@ -32,6 +32,7 @@ from typing import Any
 
 import polars as pl
 from statsforecast import StatsForecast
+from statsforecast.models import Naive
 
 from freecast import contract, intermittent, selection
 from freecast.freq import resolve_freq
@@ -189,6 +190,7 @@ class ForecastEngine:
 
         selection_df = pl.concat(selection_parts, how="vertical")
         forecasts_df = pl.concat(forecast_parts, how="vertical")
+        forecasts_df, selection_df = self._replace_unfittable(clean_df, forecasts_df, selection_df)
 
         return ForecastResult(
             forecasts=forecasts_df,
@@ -196,6 +198,57 @@ class ForecastEngine:
             classification=classification,
             validation=report,
         )
+
+    def _replace_unfittable(
+        self, df: pl.DataFrame, forecasts: pl.DataFrame, selection_df: pl.DataFrame
+    ) -> tuple[pl.DataFrame, pl.DataFrame]:
+        """Give series whose chosen model couldn't be fit an explicit Naive forecast.
+
+        This happens when a series is too short for any candidate to fit (a
+        product with a few periods of history). The series is labeled
+        ``Naive`` with no backtest score, rather than failing the whole batch
+        or reporting a model that didn't actually produce the numbers.
+        """
+        value_cols = [c for c in forecasts.columns if c not in ("unique_id", "ds", "model")]
+        bad = (
+            forecasts.filter(
+                pl.any_horizontal(pl.col(c).is_null() | pl.col(c).is_nan() for c in value_cols)
+            )["unique_id"]
+            .unique()
+            .to_list()
+        )
+        if not bad:
+            return forecasts, selection_df
+
+        sf = StatsForecast(models=[Naive(alias="Naive")], freq=self._freq_polars, n_jobs=1)
+        naive = sf.forecast(
+            h=self.h,
+            df=df.filter(pl.col("unique_id").is_in(bad)).select(["unique_id", "ds", "y"]),
+            level=self.levels,
+        )
+        rename = {"Naive": "y_hat"} | {
+            f"Naive-{side}-{lv}": f"{side}-{lv}" for lv in self.levels for side in ("lo", "hi")
+        }
+        naive = naive.rename(rename).with_columns(pl.lit("Naive").alias("model"))
+        forecasts = pl.concat(
+            [
+                forecasts.filter(~pl.col("unique_id").is_in(bad)),
+                naive.select(forecasts.columns),
+            ],
+            how="vertical",
+        )
+        metric_cols = [c for c in selection_df.columns if c not in ("unique_id", "model")]
+        selection_df = selection_df.with_columns(
+            pl.when(pl.col("unique_id").is_in(bad))
+            .then(pl.lit("Naive"))
+            .otherwise(pl.col("model"))
+            .alias("model"),
+            *[
+                pl.when(pl.col("unique_id").is_in(bad)).then(None).otherwise(pl.col(c)).alias(c)
+                for c in metric_cols
+            ],
+        )
+        return forecasts, selection_df
 
     def _validate_regressors(
         self, clean_df: pl.DataFrame, X_df: pl.DataFrame | None, regressor_cols: list[str]
@@ -288,7 +341,10 @@ class ForecastEngine:
             # statsforecast stores the conformal spec on the model objects
             # themselves, so each partition needs its own copies.
             sf = StatsForecast(
-                models=copy.deepcopy(models), freq=self._freq_polars, n_jobs=self.n_jobs
+                models=copy.deepcopy(models),
+                freq=self._freq_polars,
+                n_jobs=self.n_jobs,
+                fallback_model=selection.Unfittable(),
             )
             if has_native_intervals and max_windows < 2:
                 wide_parts.append(sf.forecast(h=self.h, df=part_df, level=self.levels, X_df=part_X))

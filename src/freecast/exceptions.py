@@ -87,6 +87,16 @@ def find_exceptions(
         )
         diagnostics.append(poor_accuracy)
 
+    # Series with too little history for any candidate to be backtested
+    # carry no accuracy score (and may be on the explicit Naive fallback):
+    # nothing has validated their forecast, so a planner should look.
+    if metric in selection.columns:
+        unscored = selection.filter(pl.col(metric).is_null() | pl.col(metric).is_nan()).select(
+            ["unique_id", pl.col("model").alias("unscored_model")]
+        )
+        flag_frames.append(unscored.select(["unique_id", pl.lit("no_backtest").alias("flag")]))
+        diagnostics.append(unscored)
+
     lo_col, hi_col = f"lo-{level}", f"hi-{level}"
     if lo_col in forecasts.columns and hi_col in forecasts.columns:
         widths = forecasts.with_columns(
