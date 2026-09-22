@@ -91,6 +91,12 @@ class RunForecastInput(BaseModel):
     on_error: Literal["raise", "drop"] = Field(
         default="raise", description="'raise' aborts on invalid series; 'drop' excludes them."
     )
+    regressors_path: str | None = Field(
+        default=None,
+        description="CSV/Parquet with known future values (unique_id, ds, plus every extra "
+        "column in input_path) — required if input_path has exogenous regressor columns "
+        "beyond unique_id/ds/y, e.g. a promo calendar.",
+    )
 
 
 @mcp.tool(
@@ -112,6 +118,7 @@ def run_forecast(params: RunForecastInput) -> str:
     from freecast.engine import ForecastEngine
 
     df = _read_df(params.input_path)
+    X_df = _read_df(params.regressors_path) if params.regressors_path is not None else None
     engine = ForecastEngine(
         h=params.horizon,
         freq=params.freq,
@@ -120,7 +127,7 @@ def run_forecast(params: RunForecastInput) -> str:
         min_history=params.min_history,
         on_error=params.on_error,
     )
-    result = engine.run(df)
+    result = engine.run(df, X_df=X_df)
 
     out = Path(params.output_dir)
     _write_df(result.forecasts, out / "forecasts.parquet")

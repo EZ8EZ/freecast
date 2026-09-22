@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import datetime
 
+import numpy as np
 import polars as pl
+import pytest
 
 from freecast import selection
+from freecast.contract import ContractError
 from freecast.engine import ForecastEngine
 
 
@@ -107,3 +110,90 @@ def test_engine_foundation_model_can_win(regular_series_df, monkeypatch):
     assert (result.forecasts["y_hat"] == 999.0).all()
     assert (result.forecasts["lo-80"] == 990.0).all()
     assert (result.forecasts["hi-80"] == 1010.0).all()
+
+
+def _promo_series_df(n: int = 60, seed: int = 1) -> pl.DataFrame:
+    rng = np.random.default_rng(seed)
+    dates = []
+    y, m = 2019, 1
+    for _ in range(n):
+        dates.append(datetime.date(y, m, 1))
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+    promo = (rng.random(n) > 0.75).astype(float)
+    y_vals = 100 + 10 * np.sin(np.arange(n) / 12 * 2 * np.pi) + 25 * promo + rng.normal(0, 2, n)
+    return pl.DataFrame({"unique_id": ["sku1"] * n, "ds": dates, "y": y_vals, "promo": promo})
+
+
+def test_engine_uses_exogenous_regressor(regular_series_df):
+    df = _promo_series_df()
+    h = 6
+    future_dates = _future_months(df["ds"].max(), h)
+    future_promo = [0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    X_df = pl.DataFrame({"unique_id": ["sku1"] * h, "ds": future_dates, "promo": future_promo})
+
+    engine = ForecastEngine(h=h, freq="MS", n_windows=1)
+    result = engine.run(df, X_df=X_df)
+
+    assert result.selection.row(0, named=True)["model"] == "AutoARIMA"
+    forecasts = result.forecasts.sort("ds")
+    promo_rows = forecasts.filter(pl.Series(future_promo) == 1.0)
+    no_promo_rows = forecasts.filter(pl.Series(future_promo) == 0.0)
+    assert promo_rows["y_hat"].mean() > no_promo_rows["y_hat"].mean() + 10
+
+
+def test_engine_requires_x_df_when_regressors_present():
+    df = _promo_series_df()
+    engine = ForecastEngine(h=6, freq="MS", n_windows=1)
+    with pytest.raises(ContractError, match="exogenous regressor"):
+        engine.run(df)
+
+
+def test_engine_rejects_x_df_with_wrong_row_count():
+    df = _promo_series_df()
+    bad_x = pl.DataFrame(
+        {
+            "unique_id": ["sku1"] * 3,
+            "ds": _future_months(df["ds"].max(), 3),
+            "promo": [0.0, 1.0, 0.0],
+        }
+    )
+    engine = ForecastEngine(h=6, freq="MS", n_windows=1)
+    with pytest.raises(ContractError, match="exactly h=6 rows"):
+        engine.run(df, X_df=bad_x)
+
+
+def test_engine_rejects_unexpected_x_df(regular_series_df):
+    h = 6
+    future_dates = _future_months(regular_series_df["ds"].max(), h)
+    uids = regular_series_df["unique_id"].unique().to_list()
+    x_df = pl.DataFrame(
+        {
+            "unique_id": [u for u in uids for _ in range(h)],
+            "ds": future_dates * len(uids),
+            "extra": [0.0] * (h * len(uids)),
+        }
+    )
+    engine = ForecastEngine(h=h, freq="1mo", n_windows=1)
+    with pytest.raises(ValueError, match="no exogenous regressor columns"):
+        engine.run(regular_series_df, X_df=x_df)
+
+
+def test_engine_skips_foundation_model_when_regressors_present(monkeypatch):
+    df = _promo_series_df()
+    h = 6
+    future_dates = _future_months(df["ds"].max(), h)
+    x_df = pl.DataFrame(
+        {"unique_id": ["sku1"] * h, "ds": future_dates, "promo": [0.0, 1.0, 0.0, 0.0, 0.0, 1.0]}
+    )
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("foundation model should be skipped when regressors are present")
+
+    monkeypatch.setattr(selection, "evaluate_foundation_model", fail_if_called)
+
+    engine = ForecastEngine(h=h, freq="MS", n_windows=1, use_foundation_model=True)
+    result = engine.run(df, X_df=x_df)
+    assert result.selection.row(0, named=True)["model"] != "T0"

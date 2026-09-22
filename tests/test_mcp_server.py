@@ -204,3 +204,70 @@ def test_reconcile_hierarchy(tmp_path):
 
     forecasts = pl.read_parquet(result["output_file"])
     assert set(forecasts["unique_id"].unique().to_list()) == {"A", "B", "A/X", "A/Y", "B/X", "B/Y"}
+
+
+def test_run_forecast_with_regressors(tmp_path):
+    rng = np.random.default_rng(1)
+    n = 60
+    dates = []
+    y, m = 2019, 1
+    for _ in range(n):
+        dates.append(datetime.date(y, m, 1))
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+    promo = (rng.random(n) > 0.75).astype(float)
+    y_vals = 100 + 10 * np.sin(np.arange(n) / 12 * 2 * np.pi) + 25 * promo + rng.normal(0, 2, n)
+    input_path = tmp_path / "series.csv"
+    pl.DataFrame({"unique_id": ["sku1"] * n, "ds": dates, "y": y_vals, "promo": promo}).write_csv(
+        input_path
+    )
+
+    h = 6
+    future_dates = []
+    yy, mm = y, m
+    for _ in range(h):
+        future_dates.append(datetime.date(yy, mm, 1))
+        mm += 1
+        if mm > 12:
+            mm = 1
+            yy += 1
+    regressors_path = tmp_path / "regressors.csv"
+    pl.DataFrame(
+        {"unique_id": ["sku1"] * h, "ds": future_dates, "promo": [0.0, 1.0, 0.0, 0.0, 0.0, 1.0]}
+    ).write_csv(regressors_path)
+
+    out_dir = tmp_path / "out"
+    result = _call(
+        "freecast_run_forecast",
+        {
+            "input_path": str(input_path),
+            "horizon": h,
+            "freq": "MS",
+            "output_dir": str(out_dir),
+            "regressors_path": str(regressors_path),
+        },
+    )
+    assert result["n_series"] == 1
+
+    selection = pl.read_parquet(out_dir / "model_selection.parquet")
+    assert selection.row(0, named=True)["model"] == "AutoARIMA"
+
+
+def test_run_forecast_missing_regressors_errors(tmp_path):
+    input_path = tmp_path / "series.csv"
+    pl.DataFrame(
+        {
+            "unique_id": ["a"] * 10,
+            "ds": [f"2024-{i + 1:02d}-01" for i in range(10)],
+            "y": list(range(10)),
+            "promo": [0.0] * 10,
+        }
+    ).write_csv(input_path)
+
+    with pytest.raises(Exception, match="exogenous regressor"):
+        _call(
+            "freecast_run_forecast",
+            {"input_path": str(input_path), "horizon": 3, "freq": "MS"},
+        )

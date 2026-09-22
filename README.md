@@ -96,6 +96,32 @@ by default. Pass `on_error="drop"` (`--on-error drop` on the CLI) to instead
 drop the offending series and keep going — the returned validation report
 says exactly what was dropped and why.
 
+### Exogenous regressors
+
+Any column besides `unique_id`, `ds`, `y` is an exogenous regressor — a
+promo flag, price, a known-holiday indicator. Forecasting past the end of
+history needs *known future values* for those (freecast can't invent your
+promo calendar), so pass an `X_df` with the same regressor columns covering
+exactly the next `h` periods per series:
+
+```python
+result = engine.run(df, X_df=future_regressors)  # unique_id, ds, promo, ...
+```
+
+or `freecast run sales.csv --regressors-path future_promo.csv ...`. Omitting
+`X_df` when the input has regressor columns is a clear, specific error
+rather than a silent drop — freecast used to crash deep inside statsforecast
+on this; now it tells you exactly what's missing before it gets there.
+
+Only AutoARIMA in the regular-series pool actually has a mechanism for
+exogenous regressors — AutoETS/AutoTheta/AutoCES accept the extra columns
+without erroring but silently ignore them (classical exponential smoothing
+and Theta have no covariate concept). This isn't a gap freecast codes
+around: it's the CV-based selection the whole engine is built on working
+correctly. If a regressor is genuinely predictive, AutoARIMA backtests
+better — because it alone can use that information — and wins selection on
+its own merits, no special-casing required.
+
 ## Benchmarks
 
 `freecast` includes a reproducible benchmark harness against public

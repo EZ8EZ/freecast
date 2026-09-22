@@ -80,10 +80,20 @@ def run(
             "--levels of 80 and/or 50)."
         ),
     ),
+    regressors_path: Path = typer.Option(
+        None,
+        "--regressors-path",
+        help=(
+            "CSV/Parquet with known future values (unique_id, ds, plus every extra "
+            "column in INPUT_PATH) — required if INPUT_PATH has exogenous regressor "
+            "columns beyond unique_id/ds/y (e.g. a promo calendar)."
+        ),
+    ),
 ) -> None:
     """Run the full freecast pipeline on a series file and write results to OUTPUT_DIR."""
     level_list = tuple(int(x) for x in levels.split(","))
     df = _read(input_path)
+    X_df = _read(regressors_path) if regressors_path is not None else None
 
     engine = ForecastEngine(
         h=horizon,
@@ -97,7 +107,7 @@ def run(
         n_jobs=n_jobs,
         use_foundation_model=use_foundation_model,
     )
-    result = engine.run(df)
+    result = engine.run(df, X_df=X_df)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     _write(result.forecasts, output_dir / "forecasts.parquet")
