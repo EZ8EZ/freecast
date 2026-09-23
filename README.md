@@ -215,6 +215,48 @@ per-group output:
 length never reached the model pool; that was fixed via
 `freecast.freq.resolve_freq` before any of the numbers above.)
 
+### Tourism competition
+
+The second public head-to-head: the 2010 Tourism forecasting competition
+([Athanasopoulos, Hyndman, Song & Wu 2011](https://robjhyndman.com/papers/forecompijf.pdf),
+*International Journal of Forecasting* 27(3)), where **Forecast Pro was one
+of the published benchmark methods**. 1,311 series: 366 monthly (h=24),
+427 quarterly (h=8), 518 yearly (h=4).
+
+```bash
+freecast bench tourism            # or --group Monthly
+```
+
+Scoring follows the paper exactly, so the comparison is like for like:
+plain MAPE, and MASE scaled by the seasonal-naive error over the full
+series (training plus hold-out), which is what the published tables used.
+The harness checks itself against the paper: recomputing the paper's own
+Naive/SNaive benchmarks reproduces its published MAPE and MASE to the
+digit for all three groups (see `src/freecast/bench/tourism.py`).
+
+Average over the forecast horizon, lower is better. Published rows are
+from the paper's Tables 4-6; the freecast row is this harness, zero
+series dropped:
+
+| Method | Monthly MAPE | Monthly MASE | Quarterly MAPE | Quarterly MASE | Yearly MAPE | Yearly MASE |
+|---|---|---|---|---|---|---|
+| **freecast** | 21.20 | 1.42 | **15.40** | 1.45 | 25.87 | 2.48 |
+| **ForePro** (Forecast Pro) | **19.91** | 1.40 | 15.72 | 1.48 | 26.36 | 2.65 |
+| ETS | 21.15 | 1.49 | 16.05 | 1.58 | 27.68 | 2.71 |
+| ARIMA | 21.13 | **1.38** | 16.23 | 1.47 | 28.03 | 2.63 |
+| Theta | 22.11 | 1.55 | 16.15 | 1.56 | **23.45** | **2.28** |
+| Damped | 23.47 | 1.66 | 15.56 | **1.43** | 28.15 | 2.75 |
+| SNaive / Naive | 22.56 | 1.54 | 16.46 | 1.59 | 23.61 | 2.50 |
+
+freecast beats Forecast Pro on both metrics for quarterly and yearly data
+(and has the lowest quarterly MAPE of any method), and loses to it on
+monthly, most clearly on MAPE (21.20 vs 19.91). Yearly is also a reminder
+that simple methods are hard to beat on short annual series: Theta and
+even the naive forecast beat everything else there on MAPE. Monthly is the
+slow group too (about 50 minutes on a 4-core VM, dominated by seasonal
+AutoARIMA/AutoCES fits on long series). Raw output:
+[`src/freecast/bench/results/tourism_summary.json`](src/freecast/bench/results/tourism_summary.json).
+
 ## Optional: zero-shot foundation model candidate
 
 freecast can optionally include [t0](https://github.com/theforecastingcompany/tfc-t0)
@@ -392,7 +434,7 @@ src/freecast/
 ├── engine.py        # orchestrates the forecasting pipeline
 ├── mcp_server.py     # MCP server exposing the library to any MCP client
 ├── cli.py             # the `freecast` command
-└── bench/               # M-competition benchmark harness
+└── bench/               # M3 and Tourism benchmark harnesses
 tests/                    # pytest suite
 ```
 
@@ -407,7 +449,9 @@ The originally scoped feature set — the core engine, the override/audit-trail/
 FVA workflow layer, hierarchical reconciliation, and the MCP server — is all
 here. Ideas for what's next (not started): a hosted/multi-tenant deployment
 option, richer collaborative consensus workflows across sales/ops/finance,
-and M4/Tourism bench harnesses to match the M3 one.
+an M4 bench harness to match the M3 and Tourism ones, better accuracy on
+long monthly series (freecast's weakest Tourism group relative to the
+published methods), and faster seasonal model fitting on those series.
 
 ## License
 

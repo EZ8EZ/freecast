@@ -17,3 +17,4 @@ src/freecast/bench/data/
 src/freecast/bench/results/*.json
 !src/freecast/bench/results/.gitkeep
 !src/freecast/bench/results/m3_summary.json
+!src/freecast/bench/results/tourism_summary.json

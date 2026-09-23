@@ -1,0 +1,50 @@
+[
+  {
+    "dataset": "tourism",
+    "group": "Yearly",
+    "n_series": 518,
+    "n_dropped": 0,
+    "mape": 25.870170133370323,
+    "mase": 2.4800087018555215,
+    "seconds_elapsed": 103.76999831199646,
+    "model_counts": {
+      "AutoTheta": 114,
+      "Ensemble": 56,
+      "AutoARIMA": 107,
+      "AutoCES": 143,
+      "AutoETS": 98
+    }
+  },
+  {
+    "dataset": "tourism",
+    "group": "Quarterly",
+    "n_series": 427,
+    "n_dropped": 0,
+    "mape": 15.403087985861044,
+    "mase": 1.4544847960997414,
+    "seconds_elapsed": 407.74896025657654,
+    "model_counts": {
+      "AutoETS": 78,
+      "AutoTheta": 94,
+      "AutoCES": 118,
+      "Ensemble": 75,
+      "AutoARIMA": 62
+    }
+  },
+  {
+    "dataset": "tourism",
+    "group": "Monthly",
+    "n_series": 366,
+    "n_dropped": 0,
+    "mape": 21.19604147329616,
+    "mase": 1.4165635159898138,
+    "seconds_elapsed": 3027.680945634842,
+    "model_counts": {
+      "AutoTheta": 81,
+      "AutoETS": 66,
+      "Ensemble": 47,
+      "AutoCES": 85,
+      "AutoARIMA": 87
+    }
+  }
+]
