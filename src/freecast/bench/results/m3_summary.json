@@ -1,0 +1,66 @@
+[
+  {
+    "dataset": "m3",
+    "group": "Yearly",
+    "n_series": 645,
+    "n_dropped": 0,
+    "smape": 17.198914060290154,
+    "mase": 3.0420511777685983,
+    "seconds_elapsed": 90.54165863990784,
+    "model_counts": {
+      "Ensemble": 68,
+      "AutoTheta": 123,
+      "AutoARIMA": 157,
+      "AutoCES": 186,
+      "AutoETS": 111
+    }
+  },
+  {
+    "dataset": "m3",
+    "group": "Quarterly",
+    "n_series": 756,
+    "n_dropped": 0,
+    "smape": 9.58607785077376,
+    "mase": 1.1503212474980364,
+    "seconds_elapsed": 310.61929988861084,
+    "model_counts": {
+      "Ensemble": 75,
+      "AutoTheta": 125,
+      "AutoARIMA": 210,
+      "AutoETS": 161,
+      "AutoCES": 185
+    }
+  },
+  {
+    "dataset": "m3",
+    "group": "Monthly",
+    "n_series": 1428,
+    "n_dropped": 0,
+    "smape": 14.38693670332776,
+    "mase": 0.8513427974969935,
+    "seconds_elapsed": 1758.742868900299,
+    "model_counts": {
+      "AutoARIMA": 388,
+      "AutoCES": 262,
+      "AutoTheta": 282,
+      "AutoETS": 291,
+      "Ensemble": 205
+    }
+  },
+  {
+    "dataset": "m3",
+    "group": "Other",
+    "n_series": 174,
+    "n_dropped": 0,
+    "smape": 4.49442970626185,
+    "mase": 1.8848558627140652,
+    "seconds_elapsed": 36.40033197402954,
+    "model_counts": {
+      "AutoARIMA": 41,
+      "AutoETS": 27,
+      "AutoCES": 49,
+      "AutoTheta": 34,
+      "Ensemble": 23
+    }
+  }
+]

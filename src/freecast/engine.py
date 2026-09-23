@@ -1,38 +1,42 @@
-"""Orchestrates the full freecast pipeline: validate -> classify -> select -> forecast."""
+"""Orchestrates the full freecast pipeline: validate -> classify -> select -> forecast.
+
+Exogenous regressors
+---------------------
+Any column in the input besides ``unique_id``, ``ds``, ``y`` is treated as an
+exogenous regressor (e.g. a promo flag, price, a known holiday indicator).
+Forecasting past the end of history needs *known future values* for those
+columns — freecast can't invent your promo calendar — so ``ForecastEngine.run``
+takes an optional ``X_df`` with the same regressor columns covering exactly
+the ``h`` future periods per series.
+
+Only AutoARIMA (of the regular-series pool) actually has a mechanism for
+exogenous regressors; AutoETS/AutoTheta/AutoCES accept the extra columns
+without erroring but silently ignore them (classical exponential smoothing
+and Theta have no covariate concept). This isn't a special case freecast
+codes around — it's the CV-based selection this whole engine is built on
+working correctly: if a regressor is genuinely predictive, AutoARIMA
+backtests better because it alone can use that information, and wins
+selection on its own merits. Croston-family (intermittent) models ignore
+extra columns the same way and never need ``X_df``. The optional t0
+foundation-model candidate has no mechanism for *future*-known regressors
+either, so it's excluded from selection whenever regressor columns are
+present, rather than risk it winning on a coincidence and quietly dropping
+a real promo/price effect.
+"""
 
 from __future__ import annotations
 
-import re
+import copy
 from dataclasses import dataclass
 from typing import Any
 
 import polars as pl
 from statsforecast import StatsForecast
+from statsforecast.models import Naive
 
 from freecast import contract, intermittent, selection
+from freecast.freq import resolve_freq
 from freecast.intervals import DEFAULT_LEVELS, build_conformal_intervals
-
-_FREQ_SEASON_LENGTH = {
-    "D": 7,
-    "B": 5,
-    "W": 52,
-    "M": 12,
-    "MS": 12,
-    "Q": 4,
-    "QS": 4,
-    "Y": 1,
-    "A": 1,
-    "AS": 1,
-    "H": 24,
-}
-
-
-def infer_season_length(freq: str | int) -> int:
-    """Best-effort seasonal period for a pandas-style frequency string."""
-    if isinstance(freq, int):
-        return 1
-    key = re.sub(r"^\d+", "", freq.upper())
-    return _FREQ_SEASON_LENGTH.get(key, 1)
 
 
 @dataclass
@@ -57,27 +61,56 @@ class ForecastEngine:
         *,
         h: int,
         freq: str | int,
+        season_length: int | None = None,
         levels: tuple[int, ...] = DEFAULT_LEVELS,
         metric: str = "mase",
         n_windows: int = 2,
         min_history: int = 6,
         on_error: str = "raise",
         n_jobs: int = -1,
+        use_foundation_model: bool = False,
+        ensemble: bool = True,
     ) -> None:
+        """
+        ensemble: add an equal-weight combination of the regular models
+            (AutoETS/AutoARIMA/AutoTheta/AutoCES) as a selection candidate —
+            see ``selection.add_ensemble``. It's chosen for a series only if
+            it wins that series' cross-validation.
+        season_length: override the seasonal period used by seasonal models
+            and MASE/RMSSE scaling. By default this is inferred from ``freq``
+            (e.g. 12 for monthly data), which is right for genuine calendar
+            data but wrong when ``ds`` carries a frequency label with no real
+            periodicity behind it (e.g. synthetic daily dates standing in for
+            an arbitrarily-ordered sequence) — pass an explicit value in that
+            case rather than letting the freq default inject a seasonal
+            pattern that doesn't exist in the data.
+        """
         self.h = h
         self.freq = freq
+        resolved = resolve_freq(freq)
+        self._freq_polars = resolved.polars
+        self._freq_pandas = resolved.pandas
         self.levels = list(levels)
         self.metric = metric
         self.n_windows = n_windows
         self.min_history = min_history
         self.on_error = on_error
         self.n_jobs = n_jobs
-        self.season_length = infer_season_length(freq)
+        self.season_length = season_length if season_length is not None else resolved.season_length
+        self.use_foundation_model = use_foundation_model
+        self.ensemble = ensemble
 
-    def run(self, df: pl.DataFrame) -> ForecastResult:
+    def run(self, df: pl.DataFrame, X_df: pl.DataFrame | None = None) -> ForecastResult:
+        """Run the pipeline. ``X_df`` supplies known future values for any
+        exogenous regressor columns present in ``df`` (e.g. a planned promo
+        calendar) — see the module docstring's "Exogenous regressors"
+        section for what it must contain and which models actually use it.
+        """
         clean_df, report = contract.validate(
             df, min_history=self.min_history, on_error=self.on_error
         )
+        regressor_cols = [c for c in clean_df.columns if c not in ("unique_id", "ds", "y")]
+        X_df = self._validate_regressors(clean_df, X_df, regressor_cols)
 
         classification = intermittent.classify_series(clean_df)
         regular_df, intermittent_df = intermittent.split_by_demand_type(clean_df, classification)
@@ -90,17 +123,49 @@ class ForecastEngine:
             reg_sel = selection.select_models(
                 regular_df,
                 h=self.h,
-                freq=self.freq,
+                freq=self._freq_polars,
                 season_length=self.season_length,
                 models=reg_models,
                 n_windows=self.n_windows,
                 metric=self.metric,
                 n_jobs=self.n_jobs,
+                ensemble=self.ensemble,
             )
+
+            # t0 has no mechanism for the future-known regressors X_df
+            # carries (only historical covariates), so including it as a
+            # candidate when regressors are in play would let it silently
+            # ignore information AutoARIMA is genuinely using — skip it
+            # rather than risk it winning selection on a coincidence and
+            # quietly dropping the promo/price/etc. effect.
+            t0_forecast = None
+            if self.use_foundation_model and not regressor_cols:
+                foundation_acc, t0_forecast = selection.evaluate_foundation_model(
+                    regular_df,
+                    h=self.h,
+                    freq=self._freq_pandas,
+                    season_length=self.season_length,
+                    levels=tuple(self.levels),
+                    metric=self.metric,
+                )
+                reg_sel = selection.merge_foundation_candidate(reg_sel, foundation_acc)
+
+            reg_X_df = None
+            if X_df is not None:
+                reg_X_df = X_df.filter(
+                    pl.col("unique_id").is_in(regular_df["unique_id"].unique().to_list())
+                )
+
             selection_parts.append(reg_sel.best_model)
             forecast_parts.append(
                 self._forecast_group(
-                    regular_df, reg_models, reg_sel.best_model, has_native_intervals=True
+                    regular_df,
+                    reg_models,
+                    reg_sel.best_model,
+                    has_native_intervals=True,
+                    extra_forecast=t0_forecast,
+                    X_df=reg_X_df,
+                    ensemble=self.ensemble,
                 )
             )
 
@@ -109,7 +174,7 @@ class ForecastEngine:
             int_sel = selection.select_models(
                 intermittent_df,
                 h=self.h,
-                freq=self.freq,
+                freq=self._freq_polars,
                 season_length=self.season_length,
                 models=int_models,
                 n_windows=self.n_windows,
@@ -125,6 +190,7 @@ class ForecastEngine:
 
         selection_df = pl.concat(selection_parts, how="vertical")
         forecasts_df = pl.concat(forecast_parts, how="vertical")
+        forecasts_df, selection_df = self._replace_unfittable(clean_df, forecasts_df, selection_df)
 
         return ForecastResult(
             forecasts=forecasts_df,
@@ -133,6 +199,104 @@ class ForecastEngine:
             validation=report,
         )
 
+    def _replace_unfittable(
+        self, df: pl.DataFrame, forecasts: pl.DataFrame, selection_df: pl.DataFrame
+    ) -> tuple[pl.DataFrame, pl.DataFrame]:
+        """Give series whose chosen model couldn't be fit an explicit Naive forecast.
+
+        This happens when a series is too short for any candidate to fit (a
+        product with a few periods of history). The series is labeled
+        ``Naive`` with no backtest score, rather than failing the whole batch
+        or reporting a model that didn't actually produce the numbers.
+        """
+        value_cols = [c for c in forecasts.columns if c not in ("unique_id", "ds", "model")]
+        bad = (
+            forecasts.filter(
+                pl.any_horizontal(pl.col(c).is_null() | pl.col(c).is_nan() for c in value_cols)
+            )["unique_id"]
+            .unique()
+            .to_list()
+        )
+        if not bad:
+            return forecasts, selection_df
+
+        sf = StatsForecast(models=[Naive(alias="Naive")], freq=self._freq_polars, n_jobs=1)
+        naive = sf.forecast(
+            h=self.h,
+            df=df.filter(pl.col("unique_id").is_in(bad)).select(["unique_id", "ds", "y"]),
+            level=self.levels,
+        )
+        rename = {"Naive": "y_hat"} | {
+            f"Naive-{side}-{lv}": f"{side}-{lv}" for lv in self.levels for side in ("lo", "hi")
+        }
+        naive = naive.rename(rename).with_columns(pl.lit("Naive").alias("model"))
+        forecasts = pl.concat(
+            [
+                forecasts.filter(~pl.col("unique_id").is_in(bad)),
+                naive.select(forecasts.columns),
+            ],
+            how="vertical",
+        )
+        metric_cols = [c for c in selection_df.columns if c not in ("unique_id", "model")]
+        selection_df = selection_df.with_columns(
+            pl.when(pl.col("unique_id").is_in(bad))
+            .then(pl.lit("Naive"))
+            .otherwise(pl.col("model"))
+            .alias("model"),
+            *[
+                pl.when(pl.col("unique_id").is_in(bad)).then(None).otherwise(pl.col(c)).alias(c)
+                for c in metric_cols
+            ],
+        )
+        return forecasts, selection_df
+
+    def _validate_regressors(
+        self, clean_df: pl.DataFrame, X_df: pl.DataFrame | None, regressor_cols: list[str]
+    ) -> pl.DataFrame | None:
+        if not regressor_cols:
+            if X_df is not None:
+                raise ValueError(
+                    "X_df was provided but the input has no exogenous regressor columns "
+                    "(everything besides unique_id, ds, y) to supply future values for."
+                )
+            return None
+
+        if X_df is None:
+            raise contract.ContractError(
+                f"Input has exogenous regressor column(s) {regressor_cols}, but no X_df was "
+                "given. Forecasting past the end of history needs known future values for "
+                "them (e.g. a planned promo calendar) — freecast can't invent them. Pass "
+                "X_df with unique_id, ds, and these columns, covering exactly the next h "
+                "periods for every series."
+            )
+
+        X_df = contract.parse_ds_column(X_df)
+        missing_cols = [c for c in ("unique_id", "ds", *regressor_cols) if c not in X_df.columns]
+        if missing_cols:
+            raise contract.ContractError(
+                f"X_df is missing required column(s) {missing_cols}. It must carry unique_id, "
+                f"ds, and every regressor column present in the input: {regressor_cols}."
+            )
+
+        counts = X_df.group_by("unique_id").agg(pl.len().alias("n"))
+        wrong_length = counts.filter(pl.col("n") != self.h)
+        if wrong_length.height > 0:
+            raise contract.ContractError(
+                f"X_df must have exactly h={self.h} rows per unique_id (one per future "
+                f"period); {wrong_length.height} series don't, e.g. "
+                f"{wrong_length['unique_id'].to_list()[:5]}."
+            )
+
+        input_ids = set(clean_df["unique_id"].unique().to_list())
+        x_ids = set(X_df["unique_id"].unique().to_list())
+        missing_ids = input_ids - x_ids
+        if missing_ids:
+            raise contract.ContractError(
+                f"X_df is missing future regressor values for {len(missing_ids)} series in "
+                f"the input, e.g. {sorted(missing_ids)[:5]}."
+            )
+        return X_df
+
     def _forecast_group(
         self,
         df: pl.DataFrame,
@@ -140,9 +304,11 @@ class ForecastEngine:
         best_model: pl.DataFrame,
         *,
         has_native_intervals: bool,
+        extra_forecast: pl.DataFrame | None = None,
+        X_df: pl.DataFrame | None = None,
+        ensemble: bool = False,
     ) -> pl.DataFrame:
         model_names = [getattr(m, "alias", type(m).__name__) for m in models]
-        sf = StatsForecast(models=models, freq=self.freq, n_jobs=self.n_jobs)
 
         # Conformal intervals need >= 2 full backtest windows of length h left
         # over after fitting; on very short series (some M3 Yearly series
@@ -151,15 +317,53 @@ class ForecastEngine:
         # fallback in that case. Croston-family models have no such
         # fallback — they only know how to produce intervals conformally —
         # but they tolerate short series fine, so they always go the
-        # conformal route.
-        min_len = df.group_by("unique_id").agg(pl.len().alias("n")).select(pl.col("n").min()).item()
-        max_feasible_windows = (min_len - 1) // self.h - 1
-        if has_native_intervals and max_feasible_windows < 2:
-            wide = sf.forecast(h=self.h, df=df, level=self.levels)
+        # conformal route. Feasibility is decided per series, not per batch:
+        # otherwise one newly-launched SKU would silently switch every other
+        # series in the run from conformal to parametric intervals.
+        feasible = df.group_by("unique_id").agg(((pl.len() - 1) // self.h - 1).alias("max_windows"))
+        if has_native_intervals:
+            partitions = [
+                feasible.filter(pl.col("max_windows") >= 2),
+                feasible.filter(pl.col("max_windows") < 2),
+            ]
         else:
-            n_windows = max(min(max(self.n_windows, 2), max_feasible_windows), 2)
+            partitions = [feasible]
+
+        wide_parts = []
+        for part in partitions:
+            if part.height == 0:
+                continue
+            ids = part["unique_id"].to_list()
+            part_df = df.filter(pl.col("unique_id").is_in(ids))
+            part_X = X_df.filter(pl.col("unique_id").is_in(ids)) if X_df is not None else None
+            max_windows = part["max_windows"].min()
+            assert isinstance(max_windows, int)
+            # statsforecast stores the conformal spec on the model objects
+            # themselves, so each partition needs its own copies.
+            sf = StatsForecast(
+                models=copy.deepcopy(models),
+                freq=self._freq_polars,
+                n_jobs=self.n_jobs,
+                fallback_model=selection.Unfittable(),
+            )
+            if has_native_intervals and max_windows < 2:
+                wide_parts.append(sf.forecast(h=self.h, df=part_df, level=self.levels, X_df=part_X))
+                continue
+            n_windows = max(min(max(self.n_windows, 2), max_windows), 2)
             ci = build_conformal_intervals(h=self.h, n_windows=n_windows)
-            wide = sf.forecast(h=self.h, df=df, level=self.levels, prediction_intervals=ci)
+            wide_parts.append(
+                sf.forecast(
+                    h=self.h, df=part_df, level=self.levels, prediction_intervals=ci, X_df=part_X
+                )
+            )
+        wide = pl.concat(wide_parts, how="vertical")
+        if ensemble:
+            wide = selection.add_ensemble(wide, model_names, self.levels)
+            model_names = [*model_names, selection.ENSEMBLE_NAME]
+        if extra_forecast is not None:
+            wide = wide.join(extra_forecast, on=["unique_id", "ds"], how="full", coalesce=True)
+            model_names = [*model_names, "T0"]
+
         wide = wide.join(best_model.select(["unique_id", "model"]), on="unique_id", how="left")
 
         y_col = pl.coalesce(

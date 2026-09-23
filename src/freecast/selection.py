@@ -8,9 +8,11 @@ system" — encoded as a measurement, not a rule table.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 import polars as pl
 from statsforecast import StatsForecast
 from statsforecast.models import (
@@ -23,6 +25,7 @@ from statsforecast.models import (
     AutoTheta,
     CrostonClassic,
     CrostonSBA,
+    Naive,
 )
 from utilsforecast.losses import bias, mase, rmsse, smape
 
@@ -35,6 +38,7 @@ METRIC_FNS: dict[str, Any] = {
 SCALED_METRICS = {"mase", "rmsse"}
 
 DEFAULT_REGULAR_POOL = ("AutoETS", "AutoARIMA", "AutoTheta", "AutoCES")
+ENSEMBLE_NAME = "Ensemble"
 DEFAULT_INTERMITTENT_POOL = ("CrostonClassic", "CrostonSBA", "TSB", "ADIDA", "IMAPA")
 
 
@@ -55,6 +59,23 @@ def default_intermittent_models() -> list[Any]:
         ADIDA(alias="ADIDA"),
         IMAPA(alias="IMAPA"),
     ]
+
+
+class Unfittable(Naive):
+    """statsforecast fallback that marks a failed fit as NaN instead of hiding it.
+
+    statsforecast aborts the whole batch when one model can't be fit on one
+    series (e.g. AutoETS raises on a handful of points), unless a
+    ``fallback_model`` is given, and a fallback's output is stored under the
+    failed model's name. A naive fallback would therefore be mislabeled as,
+    say, AutoETS. Returning NaN instead keeps the batch running while making
+    the failure visible: an unscored model can never win selection, and the
+    engine replaces a NaN forecast with an explicitly labeled Naive one.
+    """
+
+    def forecast(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        res = super().forecast(*args, **kwargs)
+        return {k: np.full_like(v, np.nan, dtype=float) for k, v in res.items()}
 
 
 @dataclass
@@ -80,6 +101,7 @@ def select_models(
     n_windows: int = 2,
     metric: str = "mase",
     n_jobs: int = -1,
+    ensemble: bool = False,
 ) -> SelectionResult:
     """Backtest ``models`` on ``df`` via rolling-origin CV and pick a winner per series.
 
@@ -87,11 +109,15 @@ def select_models(
     ----------
     df: long-format (unique_id, ds, y) frame, already contract-validated.
     h: forecast horizon, also used as the CV step/test window size.
-    freq: pandas-style frequency string (or integer step) for the series.
+    freq: Polars-style frequency string (or integer step) for the series —
+        i.e. ``ResolvedFreq.polars`` from ``freecast.freq.resolve_freq``.
     season_length: seasonal period used by seasonal models and MASE/RMSSE scaling.
     models: candidate model instances; defaults to the regular ETS/ARIMA/Theta/CES pool.
     n_windows: number of rolling-origin CV windows to backtest across.
     metric: one of "mase", "rmsse", "smape", "bias" — lower is better for all of them.
+    ensemble: also score an "Ensemble" candidate, the equal-weight mean of
+        every model in the pool (see ``add_ensemble``). It has to win CV on a
+        series like any other candidate to be selected.
     """
     if metric not in METRIC_FNS:
         raise ValueError(f"Unknown metric {metric!r}; choose one of {sorted(METRIC_FNS)}")
@@ -99,42 +125,185 @@ def select_models(
     pool = models if models is not None else default_regular_models(season_length)
     model_names = [getattr(m, "alias", type(m).__name__) for m in pool]
 
-    min_len = df.group_by("unique_id").agg(pl.len().alias("n")).select(pl.col("n").min()).item()
-    required = h * (n_windows + 1) + 1
-    if min_len < required:
-        n_windows = max(1, (min_len - h - 1) // h) if min_len > h + 1 else 1
-        n_windows = max(1, min(n_windows, 2))
+    cv_df = backtest(df, h=h, freq=freq, models=pool, n_windows=n_windows, n_jobs=n_jobs)
+    if ensemble:
+        cv_df = add_ensemble(cv_df, model_names)
+        model_names = [*model_names, ENSEMBLE_NAME]
+    acc_long = score_backtest(cv_df, df, model_names, metric=metric, season_length=season_length)
 
-    sf = StatsForecast(models=pool, freq=freq, n_jobs=n_jobs)
-    cv_df = sf.cross_validation(h=h, df=df, n_windows=n_windows)
+    best = _pick_best(acc_long, metric)
+    return SelectionResult(best_model=best, cv_accuracy=acc_long, metric=metric)
 
+
+def add_ensemble(
+    wide: pl.DataFrame, members: list[str], levels: list[int] | tuple[int, ...] = ()
+) -> pl.DataFrame:
+    """Add an equal-weight combination of ``members`` as an "Ensemble" column.
+
+    Forecast combination is one of the most consistent findings in the
+    forecasting literature (Bates & Granger 1969 onward; the M3 and M4
+    competitions): averaging several reasonable models usually beats picking
+    one, because it hedges against choosing the wrong model on a few noisy
+    backtest windows. An equal-weight mean is used deliberately: estimated
+    combination weights rarely beat it out of sample (the "forecast
+    combination puzzle"), and it can't be overfit to a benchmark.
+
+    For each requested level the ensemble's interval bounds are the mean of
+    the members' bounds (quantile averaging, a.k.a. Vincentization), which
+    keeps each bound a proper quantile forecast at that level.
+    """
+    exprs = [pl.mean_horizontal(members).alias(ENSEMBLE_NAME)]
+    for level in levels:
+        for side in ("lo", "hi"):
+            exprs.append(
+                pl.mean_horizontal([f"{m}-{side}-{level}" for m in members]).alias(
+                    f"{ENSEMBLE_NAME}-{side}-{level}"
+                )
+            )
+    return wide.with_columns(exprs)
+
+
+def backtest(
+    df: pl.DataFrame,
+    *,
+    h: int,
+    freq: str | int,
+    models: list[Any],
+    n_windows: int,
+    n_jobs: int = -1,
+) -> pl.DataFrame:
+    """Rolling-origin CV, with the window count decided per series.
+
+    Each series gets as many windows (up to ``n_windows``) as its own
+    history supports. Deciding this batch-wide would let one newly-launched
+    SKU cut every other series in the run down to a single, noisier
+    backtest window — and silently change which model they get.
+    """
+    windows = df.group_by("unique_id").agg(
+        ((pl.len() - h - 1) // h).clip(1, max(n_windows, 1)).alias("w")
+    )
+    parts = []
+    for (w,), bucket in windows.group_by("w"):
+        bucket_df = df.filter(pl.col("unique_id").is_in(bucket["unique_id"].to_list()))
+        sf = StatsForecast(
+            models=copy.deepcopy(models), freq=freq, n_jobs=n_jobs, fallback_model=Unfittable()
+        )
+        parts.append(sf.cross_validation(h=h, df=bucket_df, n_windows=int(w)))
+    return pl.concat(parts, how="vertical")
+
+
+def score_backtest(
+    cv_df: pl.DataFrame,
+    train_df: pl.DataFrame,
+    model_names: list[str],
+    *,
+    metric: str,
+    season_length: int,
+) -> pl.DataFrame:
+    """Score a wide CV frame into a long (unique_id, model, <metric>) table."""
     metric_fn = METRIC_FNS[metric]
-    kwargs = (
-        {"df": cv_df, "models": model_names, "train_df": df}
-        if metric in SCALED_METRICS
-        else {
-            "df": cv_df,
-            "models": model_names,
-        }
-    )
+    kwargs: dict[str, Any] = {"df": cv_df, "models": model_names}
     if metric in SCALED_METRICS:
+        kwargs["train_df"] = train_df
         kwargs["seasonality"] = season_length
-
     acc = metric_fn(**kwargs)
-    acc_long = acc.unpivot(
-        index="unique_id", on=model_names, variable_name="model", value_name=metric
-    )
+    return acc.unpivot(index="unique_id", on=model_names, variable_name="model", value_name=metric)
 
-    # bias is signed (0 is ideal); every other supported metric is a
-    # non-negative error where lower is strictly better.
+
+def _pick_best(acc_long: pl.DataFrame, metric: str) -> pl.DataFrame:
+    """Pick the winning model per series from a long (unique_id, model, <metric>) table.
+
+    bias is signed (0 is ideal); every other supported metric is a
+    non-negative error where lower is strictly better.
+    """
     rank_col = acc_long[metric].abs() if metric == "bias" else acc_long[metric]
-    acc_long = acc_long.with_columns(rank_col.alias("_rank"))
-    best = (
-        acc_long.sort(["unique_id", "_rank"])
+    # A model that couldn't be scored (null/NaN) must never outrank one that
+    # could; Polars sorts nulls first by default. If no model scored, the
+    # stable sort keeps pool order, so the first pool model is the fallback.
+    rank_col = rank_col.fill_nan(None)
+    ranked = acc_long.with_columns(rank_col.alias("_rank"))
+    return (
+        ranked.sort(["unique_id", "_rank"], nulls_last=True, maintain_order=True)
         .group_by("unique_id", maintain_order=True)
         .first()
         .drop("_rank")
     )
-    acc_long = acc_long.drop("_rank")
 
-    return SelectionResult(best_model=best, cv_accuracy=acc_long, metric=metric)
+
+def evaluate_foundation_model(
+    df: pl.DataFrame,
+    *,
+    h: int,
+    freq: str | int,
+    season_length: int,
+    levels: tuple[int, ...] = (80,),
+    metric: str = "mase",
+) -> tuple[pl.DataFrame, pl.DataFrame | None]:
+    """Backtest and forecast with the optional t0 foundation model (see ``foundation.py``).
+
+    Zero-shot models don't need per-series training, so unlike
+    ``select_models`` this uses a single held-out window (the last ``h``
+    points) rather than multiple rolling-origin windows — cheap and
+    sufficient to compare against the statistical pool's CV accuracy.
+
+    Returns ``(accuracy, forecast)`` where ``accuracy`` is a long
+    (unique_id, model="T0", <metric>) table (empty if t0 is unavailable or
+    the requested levels aren't supported), and ``forecast`` is the
+    corresponding wide forecast frame (or None if accuracy is empty).
+    """
+    from freecast.foundation import (
+        MODEL_NAME,
+        FoundationModelUnavailable,
+        T0Model,
+        levels_supported,
+    )
+
+    empty = pl.DataFrame(schema={"unique_id": pl.Utf8, "model": pl.Utf8, metric: pl.Float64})
+    if not levels_supported(levels):
+        return empty, None
+
+    min_len = df.group_by("unique_id").agg(pl.len().alias("n")).select(pl.col("n").min()).item()
+    if min_len <= h:
+        return empty, None
+
+    try:
+        model = T0Model.load()
+    except FoundationModelUnavailable:
+        return empty, None
+
+    train_parts, test_parts = [], []
+    for _, series in df.sort(["unique_id", "ds"]).group_by("unique_id"):
+        train_parts.append(series.head(series.height - h))
+        test_parts.append(series.tail(h))
+    train_df = pl.concat(train_parts)
+    test_df = pl.concat(test_parts)
+
+    backtest_wide = model.predict(train_df, h=h, freq=freq, levels=levels)
+    joined = backtest_wide.join(test_df.select(["unique_id", "ds", "y"]), on=["unique_id", "ds"])
+
+    metric_fn = METRIC_FNS[metric]
+    kwargs = (
+        {"df": joined, "models": [MODEL_NAME], "train_df": train_df}
+        if metric in SCALED_METRICS
+        else {"df": joined, "models": [MODEL_NAME]}
+    )
+    if metric in SCALED_METRICS:
+        kwargs["seasonality"] = season_length
+    acc = metric_fn(**kwargs)
+    acc_long = acc.unpivot(
+        index="unique_id", on=[MODEL_NAME], variable_name="model", value_name=metric
+    )
+
+    forecast_wide = model.predict(df, h=h, freq=freq, levels=levels)
+    return acc_long, forecast_wide
+
+
+def merge_foundation_candidate(
+    result: SelectionResult, foundation_acc: pl.DataFrame
+) -> SelectionResult:
+    """Fold the optional t0 foundation-model accuracy into an existing selection result."""
+    if foundation_acc is None or foundation_acc.height == 0:
+        return result
+    combined = pl.concat([result.cv_accuracy, foundation_acc], how="vertical")
+    best = _pick_best(combined, result.metric)
+    return SelectionResult(best_model=best, cv_accuracy=combined, metric=result.metric)
